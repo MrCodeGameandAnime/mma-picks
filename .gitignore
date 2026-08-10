@@ -1,0 +1,6 @@
+.venv/
+root/.env
+root/data/*.db
+root/data/*.db-*
+**/__pycache__/
+.pytest_cache/
