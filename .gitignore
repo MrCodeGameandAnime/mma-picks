@@ -1,5 +1,6 @@
 .venv/
 root/.env
+.idea/
 root/data/*.db
 root/data/*.db-*
 **/__pycache__/

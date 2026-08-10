@@ -15,7 +15,7 @@ _MIGRATION_PATTERN = re.compile(r"^(?P<version>\d+)_.*\.sql$")
 
 
 def utc_now() -> str:
-    return datetime.now(UTC).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def connect(database_path: str | Path) -> sqlite3.Connection:
@@ -38,21 +38,43 @@ def transaction(connection: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
 
 
 def _migration_files(migrations_dir: Path) -> list[tuple[int, Path]]:
-    migrations: list[tuple[int, Path]] = []
+    migrations: dict[int, Path] = {}
     for path in migrations_dir.glob("*.sql"):
         match = _MIGRATION_PATTERN.match(path.name)
         if match:
-            migrations.append((int(match.group("version")), path))
-    return sorted(migrations)
+            version = int(match.group("version"))
+            if version in migrations:
+                previous = migrations[version].name
+                raise ValueError(
+                    f"duplicate migration version {version}: {previous} and {path.name}"
+                )
+            migrations[version] = path
+    return sorted(migrations.items())
+
+
+def _execute_script(connection: sqlite3.Connection, script: str) -> None:
+    statement_lines: list[str] = []
+    for line in script.splitlines(keepends=True):
+        statement_lines.append(line)
+        statement = "".join(statement_lines)
+        if sqlite3.complete_statement(statement):
+            if statement.strip():
+                connection.execute(statement)
+            statement_lines.clear()
+
+    remainder = "".join(statement_lines).strip()
+    if remainder:
+        raise ValueError("migration contains an incomplete SQL statement")
 
 
 def initialize_database(
     database_path: str | Path = DEFAULT_DATABASE_PATH,
     migrations_dir: str | Path = DEFAULT_MIGRATIONS_DIR,
 ) -> None:
+    migrations_dir = Path(migrations_dir)
+    migration_files = _migration_files(migrations_dir)
     database_path = Path(database_path)
     database_path.parent.mkdir(parents=True, exist_ok=True)
-    migrations_dir = Path(migrations_dir)
 
     with connect(database_path) as connection:
         connection.execute(
@@ -69,12 +91,16 @@ def initialize_database(
             for row in connection.execute("SELECT version FROM schema_migrations")
         }
 
-        for version, migration_path in _migration_files(migrations_dir):
+        for version, migration_path in migration_files:
             if version in applied:
                 continue
             with transaction(connection):
-                connection.executescript(migration_path.read_text(encoding="utf-8"))
+                _execute_script(
+                    connection,
+                    migration_path.read_text(encoding="utf-8"),
+                )
                 connection.execute(
                     "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                     (version, utc_now()),
                 )
+            applied.add(version)

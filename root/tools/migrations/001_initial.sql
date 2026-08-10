@@ -5,10 +5,10 @@ CREATE TABLE settings (
 );
 
 INSERT INTO settings(key, value, updated_at) VALUES
-    ('starting_bankroll_cents', '750', CURRENT_TIMESTAMP),
-    ('default_stake_cents', '50', CURRENT_TIMESTAMP),
-    ('max_card_fights', '15', CURRENT_TIMESTAMP),
-    ('max_exposure_cents', '750', CURRENT_TIMESTAMP);
+    ('starting_bankroll_cents', '750', strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    ('default_stake_cents', '50', strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    ('max_card_fights', '15', strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    ('max_exposure_cents', '750', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'));
 
 CREATE TABLE analysts (
     id INTEGER PRIMARY KEY,
@@ -17,7 +17,7 @@ CREATE TABLE analysts (
     source_type TEXT,
     source_url TEXT,
     active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
 INSERT INTO analysts(slug, name, source_type, active)
@@ -32,7 +32,7 @@ CREATE TABLE events (
     external_id TEXT,
     status TEXT NOT NULL DEFAULT 'draft'
         CHECK (status IN ('draft', 'upcoming', 'completed', 'canceled')),
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
 CREATE UNIQUE INDEX events_external_identity
@@ -54,7 +54,7 @@ CREATE TABLE fights (
     winner TEXT,
     external_provider TEXT,
     external_id TEXT,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     UNIQUE(event_id, bout_order)
 );
 
@@ -71,7 +71,7 @@ CREATE TABLE predictions (
     predicted_method TEXT,
     source_url TEXT,
     source_published_at TEXT,
-    captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    captured_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     UNIQUE(fight_id, analyst_id)
 );
 
@@ -92,7 +92,7 @@ CREATE TABLE wagers (
     stake_cents INTEGER NOT NULL CHECK (stake_cents > 0),
     moneyline INTEGER NOT NULL CHECK (moneyline <= -100 OR moneyline >= 100),
     sportsbook TEXT NOT NULL,
-    placed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    placed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     status TEXT NOT NULL DEFAULT 'pending'
         CHECK (status IN ('pending', 'won', 'lost', 'push', 'void')),
     profit_cents INTEGER,
