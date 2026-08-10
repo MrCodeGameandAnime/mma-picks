@@ -1,6 +1,8 @@
+from pathlib import Path
+
 from main import main
 from src.app.config import AppConfig
-from src.server import create_app
+from src.server import APP_DIR, STATIC_DIR, TEMPLATES_DIR, create_app
 
 
 def test_app_factory_uses_a_temporary_database(tmp_path):
@@ -9,6 +11,10 @@ def test_app_factory_uses_a_temporary_database(tmp_path):
 
     assert database_path.exists()
     assert app.config["DATABASE_PATH"] == str(database_path)
+    assert Path(app.jinja_loader.searchpath[0]).resolve() == TEMPLATES_DIR.resolve()
+    assert Path(app.static_folder).resolve() == STATIC_DIR.resolve()
+    assert Path(app.config["TEMPLATES_DIR"]).resolve() == TEMPLATES_DIR.resolve()
+    assert Path(app.config["STATIC_DIR"]).resolve() == STATIC_DIR.resolve()
     assert set(app.blueprints) == {"web", "api_v1"}
 
     response = app.test_client().get("/")
