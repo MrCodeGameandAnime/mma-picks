@@ -1,3 +1,5 @@
+from html.parser import HTMLParser
+
 import httpx
 import pytest
 
@@ -38,6 +40,35 @@ class FakeHTTP:
         if isinstance(response, BaseException):
             raise response
         return response
+
+
+class FormStateParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.state = {}
+        self.current_select = None
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        if tag == "input" and attributes.get("name"):
+            self.state[attributes["name"]] = attributes.get("value", "")
+        elif tag == "select" and attributes.get("name"):
+            self.current_select = attributes["name"]
+        elif tag == "option" and self.current_select:
+            value = attributes.get("value", "")
+            self.state.setdefault(self.current_select, value)
+            if "selected" in attributes:
+                self.state[self.current_select] = value
+
+    def handle_endtag(self, tag):
+        if tag == "select":
+            self.current_select = None
+
+
+def rendered_form_state(html):
+    parser = FormStateParser()
+    parser.feed(html)
+    return parser.state
 
 
 def odds_event_payload(
@@ -492,7 +523,7 @@ def test_provider_identity_and_snapshots_follow_stable_ids_when_bout_orders_swap
     assert len(refreshed) == 2
 
 
-def test_selected_provider_snapshot_stays_selected_and_provenance_survives_unrelated_edit(tmp_path):
+def test_selected_provider_snapshot_and_edit_state_survive_browser_validation_round_trip(tmp_path):
     app = create_app(AppConfig(database_path=tmp_path / "tracker.db"))
     card_id = make_empty_card(app, "Snapshot Form Card")
     provider_event = normalized_event("bout-1", update="2026-08-15T18:00:00Z")
@@ -513,57 +544,42 @@ def test_selected_provider_snapshot_stays_selected_and_provenance_survives_unrel
     with connect(app.config["DATABASE_PATH"]) as connection:
         current_fight = connection.execute("SELECT * FROM fights WHERE external_id = 'bout-1'").fetchone()
         current_snapshot = connection.execute("SELECT * FROM odds_snapshots WHERE fight_id = ? AND fighter = 'Fighter A'", (current_fight["id"],)).fetchone()
+
     client = app.test_client()
-    edit_page = client.get(f"/events/{card_id}/edit")
-    selected_marker = f'<option value="{current_snapshot["id"]}" selected>'.encode()
-    assert selected_marker in edit_page.data
+    initial_state = rendered_form_state(client.get(f"/events/{card_id}/edit").get_data(as_text=True))
+    assert initial_state["fight_id_1"] == str(current_fight["id"])
+    assert initial_state["picked_fighter_1"] == "fighter_a"
+    assert initial_state["analyst_1"] == "theweasle"
+    assert initial_state["odds_snapshot_1"] == str(current_snapshot["id"])
 
-    invalid = client.post(
-        f"/events/{card_id}/edit",
-        data={
-            "fight_count": "15",
-            "promotion": "UFC",
-            "name": "Snapshot Form Card",
-            "event_date": "2026-08-15",
-            "fight_id_1": str(current_fight["id"]),
-            "bout_order_1": "1",
-            "fighter_a_1": "Fighter A",
-            "fighter_b_1": "Fighter B",
-            "analyst_1": "theweasle",
-            "picked_fighter_1": "fighter_a",
-            "confidence_1": "101",
-            "odds_snapshot_1": str(current_snapshot["id"]),
-            "stake_1": "0.50",
-        },
-    )
+    invalid_data = dict(initial_state)
+    invalid_data["confidence_1"] = "101"
+    invalid = client.post(f"/events/{card_id}/edit", data=invalid_data)
     assert invalid.status_code == 200
-    assert selected_marker in invalid.data
+    invalid_html = invalid.get_data(as_text=True)
+    invalid_state = rendered_form_state(invalid_html)
+    assert invalid_state["fight_id_1"] == str(current_fight["id"])
+    assert invalid_state["picked_fighter_1"] == "fighter_a"
+    assert invalid_state["analyst_1"] == "theweasle"
+    assert invalid_state["odds_snapshot_1"] == str(current_snapshot["id"])
+    assert '<option value="fighter_a" selected>' in invalid_html
+    assert f'<option value="{current_snapshot["id"]}" selected>' in invalid_html
 
-    saved = client.post(
-        f"/events/{card_id}/edit",
-        data={
-            "fight_count": "15",
-            "promotion": "UFC",
-            "name": "Snapshot Form Card Updated",
-            "event_date": "2026-08-15",
-            "fight_id_1": str(current_fight["id"]),
-            "bout_order_1": "1",
-            "fighter_a_1": "Fighter A",
-            "fighter_b_1": "Fighter B",
-            "analyst_1": "theweasle",
-            "picked_fighter_1": "fighter_a",
-            "confidence_1": "70",
-            "predicted_method_1": "decision",
-            "odds_snapshot_1": str(current_snapshot["id"]),
-            "stake_1": "0.50",
-        },
-    )
+    corrected_data = dict(invalid_state)
+    corrected_data["confidence_1"] = "70"
+    corrected_data["name"] = "Snapshot Form Card Updated"
+    saved = client.post(f"/events/{card_id}/edit", data=corrected_data)
     assert saved.status_code == 302
     with connect(app.config["DATABASE_PATH"]) as connection:
+        fights = connection.execute("SELECT id, external_provider, external_id, fighter_a, fighter_b FROM fights WHERE event_id = ?", (card_id,)).fetchall()
         wager = connection.execute(
             """
             SELECT os.external_provider, os.fighter, os.sportsbook, os.moneyline, os.captured_at
             FROM wagers w JOIN odds_snapshots os ON os.id = w.odds_snapshot_id
             """
         ).fetchone()
+        fight_count = connection.execute("SELECT COUNT(*) FROM fights WHERE event_id = ?", (card_id,)).fetchone()[0]
+    assert len(fights) == 1
+    assert tuple(fights[0][1:]) == ("the_odds_api", "bout-1", "Fighter A", "Fighter B")
     assert tuple(wager) == ("the_odds_api", "Fighter A", "Book One", 125, "2026-08-15T18:00:00Z")
+    assert fight_count == 1

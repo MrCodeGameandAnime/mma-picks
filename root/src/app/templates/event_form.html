@@ -2,6 +2,9 @@
 {% macro value(row, name, index, default='') -%}
 {% if request.method == 'POST' %}{{ request.form.get(name ~ '_' ~ index, default) }}{% else %}{{ row.get(name, default) if row else default }}{% endif %}
 {%- endmacro %}
+{% macro field_value(row, form_name, row_name, index, default='') -%}
+{% if request.method == 'POST' %}{{ request.form.get(form_name ~ '_' ~ index, default) }}{% else %}{{ row.get(row_name, default) if row else default }}{% endif %}
+{%- endmacro %}
 {% block title %}{{ 'Edit' if edit else 'New' }} Card - MMA Picks Tracker{% endblock %}
 {% block content %}
 <div class="page-heading"><div><p class="eyebrow">Manual tracker</p><h1>{{ 'Edit' if edit else 'New' }} card</h1></div></div>
@@ -18,7 +21,7 @@
         <td><input class="small-input" name="bout_order_{{ i }}" value="{{ value(row, 'bout_order', i, i) }}"></td>
         <td><input name="fighter_a_{{ i }}" value="{{ value(row, 'fighter_a', i) }}"></td>
         <td><input name="fighter_b_{{ i }}" value="{{ value(row, 'fighter_b', i) }}"></td>
-        <td><select name="picked_fighter_{{ i }}"><option value="">—</option><option value="fighter_a" {% if value(row, 'picked_side', i) == 'fighter_a' %}selected{% endif %}>A</option><option value="fighter_b" {% if value(row, 'picked_side', i) == 'fighter_b' %}selected{% endif %}>B</option></select></td>
+        <td><select name="picked_fighter_{{ i }}"><option value="">—</option><option value="fighter_a" {% if field_value(row, 'picked_fighter', 'picked_side', i) == 'fighter_a' %}selected{% endif %}>A</option><option value="fighter_b" {% if field_value(row, 'picked_fighter', 'picked_side', i) == 'fighter_b' %}selected{% endif %}>B</option></select></td>
         <td><input class="small-input" type="number" min="0" max="100" name="confidence_{{ i }}" value="{{ value(row, 'confidence', i) }}"></td>
         <td><input name="predicted_method_{{ i }}" value="{{ value(row, 'predicted_method', i) }}"></td>
         <td><select name="gender_{{ i }}"><option value="">—</option>{% for option in ['male', 'female'] %}<option value="{{ option }}" {% if value(row, 'gender', i) == option %}selected{% endif %}>{{ option }}</option>{% endfor %}</select></td>
@@ -28,8 +31,8 @@
         <td><input class="small-input" type="number" name="moneyline_{{ i }}" value="{{ value(row, 'moneyline', i) }}" placeholder="manual"></td>
         <td><input name="sportsbook_{{ i }}" value="{{ value(row, 'sportsbook', i) }}" placeholder="manual"></td>
         <td><input class="small-input" type="number" min="0.01" step="0.01" name="stake_{{ i }}" value="{{ value(row, 'stake', i) }}" placeholder="{{ default_stake }}"></td>
-        <input type="hidden" name="fight_id_{{ i }}" value="{{ value(row, 'id', i) }}">
-        <input type="hidden" name="analyst_{{ i }}" value="{{ value(row, 'analyst_slug', i, 'theweasle') }}">
+        <input type="hidden" name="fight_id_{{ i }}" value="{{ field_value(row, 'fight_id', 'id', i) }}">
+        <input type="hidden" name="analyst_{{ i }}" value="{{ field_value(row, 'analyst', 'analyst_slug', i, 'theweasle') }}">
     </tr>{% endfor %}</tbody></table></div></section>
     <div class="form-actions"><button class="button" type="submit">Save Card</button><a href="{{ url_for('web.events') }}">Cancel</a></div>
 </form>
