@@ -7,6 +7,7 @@ from .services.events import (
     ValidationError,
     get_analysts,
     get_event,
+    get_tracker_settings,
     list_events,
     parse_fights,
     save_event,
@@ -35,6 +36,14 @@ def events():
     )
 
 
+@web.get("/analytics")
+def analytics():
+    return render_template(
+        "analytics.html",
+        metrics=dashboard_metrics(current_app.config["DATABASE_PATH"]),
+    )
+
+
 def _form_rows(event: dict | None) -> list[dict]:
     rows = list(event["fights"]) if event else []
     rows.extend({} for _ in range(max(0, 15 - len(rows))))
@@ -42,12 +51,14 @@ def _form_rows(event: dict | None) -> list[dict]:
 
 
 def _render_event_form(event: dict | None = None, *, edit: bool = False):
+    settings = get_tracker_settings(current_app.config["DATABASE_PATH"])
     return render_template(
         "event_form.html",
         event=event,
         edit=edit,
         rows=_form_rows(event),
         analysts=get_analysts(current_app.config["DATABASE_PATH"]),
+        default_stake=f"{settings['default_stake_cents'] / 100:.2f}",
     )
 
 

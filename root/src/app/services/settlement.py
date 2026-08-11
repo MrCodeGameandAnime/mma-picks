@@ -14,8 +14,13 @@ def settle_event(
 ) -> None:
     with connect(database_path) as connection:
         with transaction(connection):
+            event = connection.execute(
+                "SELECT status FROM events WHERE id = ?", (event_id,)
+            ).fetchone()
+            if event is None:
+                raise ValidationError("event not found")
             fights = connection.execute(
-                "SELECT id, fighter_a, fighter_b FROM fights WHERE event_id = ? ORDER BY bout_order, id",
+                "SELECT id, fighter_a, fighter_b, status, winner FROM fights WHERE event_id = ? ORDER BY bout_order, id",
                 (event_id,),
             ).fetchall()
             if not fights:
@@ -26,7 +31,8 @@ def settle_event(
             if submitted_ids != fight_ids:
                 raise ValidationError("select a result for every fight")
 
-            settled_at = utc_now()
+            desired_fights: dict[int, tuple[str, str | None]] = {}
+            desired_wagers: dict[int, tuple[str, int]] = {}
             for fight in fights:
                 result = results[fight["id"]]
                 if result in {"canceled", "draw", "no_contest"}:
@@ -40,10 +46,7 @@ def settle_event(
                 else:
                     raise ValidationError(f"invalid result for {fight['fighter_a']} vs {fight['fighter_b']}")
 
-                connection.execute(
-                    "UPDATE fights SET status = ?, winner = ? WHERE id = ?",
-                    (status, winner, fight["id"]),
-                )
+                desired_fights[fight["id"]] = (status, winner)
                 wagers = connection.execute(
                     """
                     SELECT w.id, w.moneyline, w.stake_cents, p.picked_fighter
@@ -66,14 +69,50 @@ def settle_event(
                     profit_cents = calculate_profit_cents(
                         wager["stake_cents"], wager["moneyline"], payout_outcome
                     )
-                    connection.execute(
-                        """
-                        UPDATE wagers
-                        SET status = ?, profit_cents = ?, settled_at = ?
-                        WHERE id = ?
-                        """,
-                        (wager_status, profit_cents, settled_at, wager["id"]),
-                    )
+                    desired_wagers[wager["id"]] = (wager_status, profit_cents)
+
+            current_wagers = connection.execute(
+                """
+                SELECT w.id, w.status, w.profit_cents, w.settled_at
+                FROM wagers w
+                JOIN predictions p ON p.id = w.prediction_id
+                JOIN fights f ON f.id = p.fight_id
+                WHERE f.event_id = ?
+                """,
+                (event_id,),
+            ).fetchall()
+            fights_match = all(
+                fight["status"] == desired_fights[fight["id"]][0]
+                and fight["winner"] == desired_fights[fight["id"]][1]
+                for fight in fights
+            )
+            wagers_match = (
+                {wager["id"] for wager in current_wagers} == set(desired_wagers)
+                and all(
+                    wager["status"] == desired_wagers[wager["id"]][0]
+                    and wager["profit_cents"] == desired_wagers[wager["id"]][1]
+                    and wager["settled_at"] is not None
+                    for wager in current_wagers
+                )
+            )
+            if event["status"] == "completed" and fights_match and wagers_match:
+                return
+
+            settled_at = utc_now()
+            for fight_id, (status, winner) in desired_fights.items():
+                connection.execute(
+                    "UPDATE fights SET status = ?, winner = ? WHERE id = ?",
+                    (status, winner, fight_id),
+                )
+            for wager_id, (wager_status, profit_cents) in desired_wagers.items():
+                connection.execute(
+                    """
+                    UPDATE wagers
+                    SET status = ?, profit_cents = ?, settled_at = ?
+                    WHERE id = ?
+                    """,
+                    (wager_status, profit_cents, settled_at, wager_id),
+                )
 
             connection.execute(
                 "UPDATE events SET status = 'completed' WHERE id = ?", (event_id,)

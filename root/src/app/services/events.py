@@ -89,11 +89,17 @@ def parse_fights(form: Mapping[str, str], database_path: str | Path) -> list[Fig
         prediction_values = [
             form.get(f"picked_fighter_{index}"),
             form.get(f"confidence_{index}"),
+            form.get(f"predicted_method_{index}"),
+        ]
+        wager_values = [
             form.get(f"sportsbook_{index}"),
             form.get(f"moneyline_{index}"),
             form.get(f"stake_{index}"),
         ]
         has_prediction = any(_text(value) for value in prediction_values)
+        has_wager = any(_text(value) for value in wager_values)
+        if has_wager and not has_prediction:
+            raise ValidationError(f"fight {index} needs a complete prediction before its wager")
         analyst_id = None
         picked_fighter = None
         confidence = None
@@ -102,16 +108,22 @@ def parse_fights(form: Mapping[str, str], database_path: str | Path) -> list[Fig
         stake_cents = None
 
         if has_prediction:
-            analyst_slug = _text(form.get(f"analyst_{index}")) or "theweasle"
+            analyst_slug = _text(form.get(f"analyst_{index}"))
             analyst_id = analyst_ids.get(analyst_slug)
             if analyst_id is None:
                 raise ValidationError(f"fight {index} has an unknown analyst")
-            picked_fighter = _text(form.get(f"picked_fighter_{index}"))
-            if picked_fighter not in {fighter_a, fighter_b}:
-                raise ValidationError(f"fight {index} pick must be one of its fighters")
+            picked_side = _text(form.get(f"picked_fighter_{index}"))
+            picked_fighter = {
+                "fighter_a": fighter_a,
+                "fighter_b": fighter_b,
+            }.get(picked_side)
+            if picked_fighter is None:
+                raise ValidationError(f"fight {index} pick must select fighter A or B")
             confidence = _parse_int(form.get(f"confidence_{index}"), "confidence")
             if not 0 <= confidence <= 100:
                 raise ValidationError("confidence must be between 0 and 100")
+
+        if has_wager:
             sportsbook = _text(form.get(f"sportsbook_{index}"))
             if not sportsbook:
                 raise ValidationError(f"fight {index} needs a sportsbook")
@@ -148,9 +160,22 @@ def parse_fights(form: Mapping[str, str], database_path: str | Path) -> list[Fig
         raise ValidationError(f"a card cannot contain more than {max_card_fights} fights")
     if not fights:
         raise ValidationError("add at least one fight to the card")
+    bout_orders = [fight.bout_order for fight in fights]
+    if any(order <= 0 for order in bout_orders):
+        raise ValidationError("bout order must be a positive whole number")
+    if len(bout_orders) != len(set(bout_orders)):
+        raise ValidationError("bout order must be unique within the card")
     if exposure_cents > int(settings["max_exposure_cents"]):
         raise ValidationError("card exposure exceeds the configured maximum")
     return fights
+
+
+def get_tracker_settings(database_path: str | Path) -> dict[str, int]:
+    with connect(database_path) as connection:
+        return {
+            row["key"]: int(row["value"])
+            for row in connection.execute("SELECT key, value FROM settings")
+        }
 
 
 def save_event(
@@ -168,31 +193,36 @@ def save_event(
     if not name or not event_date:
         raise ValidationError("event name and date are required")
 
+    finalized = all(
+        fight.analyst_id is not None
+        and fight.picked_fighter is not None
+        and fight.confidence is not None
+        and fight.sportsbook is not None
+        and fight.moneyline is not None
+        and fight.stake_cents is not None
+        for fight in fights
+    )
+    event_status = "upcoming" if finalized else "draft"
+
     with connect(database_path) as connection:
         with transaction(connection):
             if event_id is None:
                 cursor = connection.execute(
-                    "INSERT INTO events(promotion, name, event_date, status) VALUES (?, ?, ?, 'upcoming')",
-                    (promotion, name, event_date),
+                    "INSERT INTO events(promotion, name, event_date, status) VALUES (?, ?, ?, ?)",
+                    (promotion, name, event_date, event_status),
                 )
                 event_id = cursor.lastrowid
             else:
-                settled = connection.execute(
-                    "SELECT COUNT(*) FROM wagers WHERE status <> 'pending' AND prediction_id IN "
-                    "(SELECT id FROM predictions WHERE fight_id IN "
-                    "(SELECT id FROM fights WHERE event_id = ?))",
-                    (event_id,),
-                ).fetchone()[0]
-                if settled:
-                    raise ValidationError("settled cards cannot be edited")
-                exists = connection.execute(
-                    "SELECT 1 FROM events WHERE id = ?", (event_id,)
+                event = connection.execute(
+                    "SELECT status FROM events WHERE id = ?", (event_id,)
                 ).fetchone()
-                if exists is None:
+                if event is None:
                     raise ValidationError("event not found")
+                if event["status"] == "completed":
+                    raise ValidationError("completed cards cannot be edited")
                 connection.execute(
-                    "UPDATE events SET promotion = ?, name = ?, event_date = ? WHERE id = ?",
-                    (promotion, name, event_date, event_id),
+                    "UPDATE events SET promotion = ?, name = ?, event_date = ?, status = ? WHERE id = ?",
+                    (promotion, name, event_date, event_status, event_id),
                 )
                 connection.execute("DELETE FROM fights WHERE event_id = ?", (event_id,))
 
@@ -232,6 +262,12 @@ def save_event(
                         fight.predicted_method,
                     ),
                 )
+                if (
+                    fight.stake_cents is None
+                    or fight.moneyline is None
+                    or fight.sportsbook is None
+                ):
+                    continue
                 connection.execute(
                     """
                     INSERT INTO wagers(
@@ -307,6 +343,12 @@ def get_event(database_path: str | Path, event_id: int) -> dict | None:
     result = dict(event)
     result["fights"] = [dict(row) for row in fights]
     for fight in result["fights"]:
+        if fight["picked_fighter"] == fight["fighter_a"]:
+            fight["picked_side"] = "fighter_a"
+        elif fight["picked_fighter"] == fight["fighter_b"]:
+            fight["picked_side"] = "fighter_b"
+        else:
+            fight["picked_side"] = ""
         if fight["stake_cents"] is not None:
             fight["stake"] = f"{fight['stake_cents'] / 100:.2f}"
     return result

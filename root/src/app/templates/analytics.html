@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Analytics - MMA Picks Tracker{% endblock %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">Gate 2 summary</p><h1>Analytics</h1></div></div>
+<section class="metric-grid">
+    <div class="metric-card"><span>Bankroll</span><strong>{{ metrics.current_bankroll_cents|money }}</strong></div>
+    <div class="metric-card"><span>Net profit</span><strong>{{ metrics.net_profit_cents|money }}</strong></div>
+    <div class="metric-card"><span>ROI</span><strong>{{ '%.1f'|format(metrics.roi * 100) }}%</strong></div>
+    <div class="metric-card"><span>Record</span><strong>{{ metrics.wins }}-{{ metrics.losses }}-{{ metrics.pushes }}</strong></div>
+    <div class="metric-card"><span>Accuracy</span><strong>{{ '%.1f'|format(metrics.accuracy * 100) }}%</strong></div>
+    <div class="metric-card"><span>Peak bankroll</span><strong>{{ metrics.peak_bankroll_cents|money }}</strong></div>
+    <div class="metric-card"><span>Max drawdown</span><strong>{{ metrics.maximum_drawdown_cents|money }}</strong></div>
+    <div class="metric-card"><span>Cards tracked</span><strong>{{ metrics.cards_tracked }}</strong></div>
+</section>
+{% endblock %}
