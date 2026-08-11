@@ -6,6 +6,7 @@ from .app.config import load_config
 from .app.db import initialize_database
 from .app.api_v1 import api_v1
 from .app.web import web
+from .app.formatting import format_money
 
 
 APP_DIR = Path(__file__).resolve().parent / "app"
@@ -22,8 +23,10 @@ def create_app(config=None) -> Flask:
         static_folder=str(STATIC_DIR),
     )
     flask_app.config["DATABASE_PATH"] = str(config.database_path)
+    flask_app.secret_key = config.flask_secret_key
     flask_app.config["TEMPLATES_DIR"] = str(TEMPLATES_DIR)
     flask_app.config["STATIC_DIR"] = str(STATIC_DIR)
+    flask_app.jinja_env.filters["money"] = format_money
     flask_app.register_blueprint(web)
     flask_app.register_blueprint(api_v1)
 

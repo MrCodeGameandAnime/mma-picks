@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · MMA Picks Tracker{% endblock %}
+{% block content %}
+<div class="page-heading">
+    <div>
+        <p class="eyebrow">Bankroll experiment</p>
+        <h1>Dashboard</h1>
+    </div>
+    <a class="button" href="{{ url_for('web.new_event') }}">New Card</a>
+</div>
+<section class="metric-grid">
+    <div class="metric primary"><span>Current bankroll</span><strong>{{ metrics.current_bankroll_cents|money }}</strong></div>
+    <div class="metric"><span>Starting bankroll</span><strong>{{ metrics.starting_bankroll_cents|money }}</strong></div>
+    <div class="metric"><span>Unit</span><strong>{{ metrics.default_stake_cents|money }}</strong></div>
+    <div class="metric"><span>Record</span><strong>{{ metrics.wins }}-{{ metrics.losses }}-{{ metrics.pushes }}</strong></div>
+    <div class="metric"><span>Hit rate</span><strong>{{ "%.1f"|format(metrics.accuracy * 100) }}%</strong></div>
+    <div class="metric"><span>Net P/L</span><strong>{{ metrics.net_profit_cents|money }}</strong></div>
+    <div class="metric"><span>ROI</span><strong>{{ "%.1f"|format(metrics.roi * 100) }}%</strong></div>
+    <div class="metric"><span>Cards tracked</span><strong>{{ metrics.cards_tracked }}</strong></div>
+</section>
+<section class="panel">
+    <div class="section-heading"><h2>Recent events</h2><a href="{{ url_for('web.events') }}">View all</a></div>
+    {% if recent_events %}
+    <table>
+        <thead><tr><th>Date</th><th>Event</th><th>Fights</th><th>Status</th></tr></thead>
+        <tbody>{% for event in recent_events %}<tr>
+            <td>{{ event.event_date }}</td>
+            <td><a href="{{ url_for('web.event_detail', event_id=event.id) }}">{{ event.name }}</a></td>
+            <td>{{ event.fight_count }}</td><td>{{ event.status }}</td>
+        </tr>{% endfor %}</tbody>
+    </table>
+    {% else %}<p class="muted">No events tracked yet.</p>{% endif %}
+</section>
+{% endblock %}

@@ -20,16 +20,19 @@ def test_app_factory_uses_a_temporary_database(tmp_path):
     response = app.test_client().get("/")
 
     assert response.status_code == 200
-    assert response.get_data(as_text=True) == "<p>Hello, World!</p>"
+    assert "Dashboard" in response.get_data(as_text=True)
 
 
 def test_api_v1_blueprint_is_registered(tmp_path):
     app = create_app(AppConfig(database_path=tmp_path / "tracker.db"))
 
     response = app.test_client().get("/api/v1")
+    static_response = app.test_client().get("/static/style.css")
 
     assert response.status_code == 200
     assert response.get_json() == {"status": "ok", "version": "v1"}
+    assert static_response.status_code == 200
+    assert "metric-grid" in static_response.get_data(as_text=True)
 
 
 def test_invalid_cli_does_not_create_an_application():

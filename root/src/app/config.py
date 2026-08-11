@@ -16,6 +16,7 @@ DEFAULT_DATABASE_PATH = ROOT_DIR / "data" / "tracker.db"
 class AppConfig:
     database_path: Path = DEFAULT_DATABASE_PATH
     odds_api_key: str | None = None
+    flask_secret_key: str = "dev-only-change-me"
 
 
 def load_config(
@@ -31,4 +32,5 @@ def load_config(
     return AppConfig(
         database_path=database_path,
         odds_api_key=values.get("ODDS_API_KEY"),
+        flask_secret_key=values.get("FLASK_SECRET_KEY", "dev-only-change-me"),
     )
