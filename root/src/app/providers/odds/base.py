@@ -1,7 +1,40 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, Sequence
+
+
+@dataclass(frozen=True)
+class QuotaInfo:
+    remaining: int | None = None
+    used: int | None = None
+    last_cost: int | None = None
+
+    @classmethod
+    def from_headers(cls, headers: dict[str, str] | None) -> "QuotaInfo":
+        values = {key.lower(): value for key, value in (headers or {}).items()}
+
+        def integer(name: str) -> int | None:
+            try:
+                return int(values[name]) if name in values else None
+            except (TypeError, ValueError):
+                return None
+
+        return cls(
+            remaining=integer("x-requests-remaining"),
+            used=integer("x-requests-used"),
+            last_cost=integer("x-requests-last"),
+        )
+
+    def as_message(self) -> str:
+        parts = []
+        if self.remaining is not None:
+            parts.append(f"remaining {self.remaining}")
+        if self.last_cost is not None:
+            parts.append(f"last request cost {self.last_cost}")
+        if self.used is not None:
+            parts.append(f"used {self.used}")
+        return ", ".join(parts)
 
 
 class OddsProviderError(RuntimeError):
@@ -14,11 +47,13 @@ class OddsProviderError(RuntimeError):
         status_code: int | None = None,
         error_code: str | None = None,
         headers: dict[str, str] | None = None,
+        quota: QuotaInfo | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.error_code = error_code
         self.headers = headers or {}
+        self.quota = quota
 
 
 class OddsProviderAuthenticationError(OddsProviderError):
@@ -66,22 +101,13 @@ class OddsEvent:
     bookmakers: tuple[BookmakerOdds, ...] = ()
 
 
-@dataclass(frozen=True)
-class OddsResult:
-    provider_event_id: str
-    status: str
-    winner: str | None
-
-
 class OddsProvider(Protocol):
-    def upcoming_events(self) -> list[OddsEvent]:
+    last_quota: QuotaInfo | None
+
+    def discover_events(
+        self, event_ids: Sequence[str] | None = None
+    ) -> list[OddsEvent]:
         ...
 
-    def get_event(self, event_id: str) -> OddsEvent:
-        ...
-
-    def get_odds(self, event_id: str) -> OddsEvent:
-        ...
-
-    def get_results(self, event_id: str) -> OddsResult:
+    def fetch_odds(self, event_ids: Sequence[str]) -> list[OddsEvent]:
         ...

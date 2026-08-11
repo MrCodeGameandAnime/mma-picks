@@ -1,19 +1,29 @@
+import httpx
 import pytest
 
 from src.app.config import AppConfig
 from src.app.db import connect
 from src.app.providers.odds import (
+    OddsEvent,
+    OddsOutcome,
     OddsProviderAuthenticationError,
     OddsProviderNotFound,
     OddsProviderQuotaExceeded,
     OddsProviderResponseError,
     OddsProviderUnavailable,
+    QuotaInfo,
     TheOddsAPIProvider,
     normalize_event,
 )
-from src.app.services.odds import import_provider_event, place_wager_from_snapshot
-from src.server import create_app
 from src.app.providers.odds.the_odds_api import HTTPResponse
+from src.app.services.events import FightInput, save_event
+from src.app.services.odds import (
+    OddsImportError,
+    import_selected_bouts,
+    place_wager_from_snapshot,
+    refresh_odds_for_card,
+)
+from src.server import create_app
 import src.app.web as web_routes
 
 
@@ -24,287 +34,313 @@ class FakeHTTP:
 
     def get(self, url, params, timeout):
         self.calls.append((url, dict(params), timeout))
-        return self.responses.pop(0)
+        response = self.responses.pop(0)
+        if isinstance(response, BaseException):
+            raise response
+        return response
 
 
-def odds_event_payload():
-    return {
-        "id": "event-123",
+def odds_event_payload(
+    event_id="event-123",
+    home_team="Fighter A",
+    away_team="Fighter B",
+    bookmakers=None,
+):
+    payload = {
+        "id": event_id,
         "sport_key": "mma_mixed_martial_arts",
         "sport_title": "MMA",
         "commence_time": "2026-08-15T20:00:00-04:00",
-        "home_team": "Fighter A",
-        "away_team": "Fighter B",
-        "bookmakers": [
-            {
-                "key": "book-one",
-                "title": "Book One",
-                "last_update": "2026-08-15T18:00:00Z",
-                "markets": [
-                    {
-                        "key": "h2h",
-                        "outcomes": [
-                            {"name": "Fighter A", "price": 125},
-                            {"name": "Fighter B", "price": -145},
-                        ],
-                    }
-                ],
-            },
-            {
-                "key": "book-two",
-                "title": "Book Two",
-                "last_update": "2026-08-15T18:01:00Z",
-                "markets": [
-                    {
-                        "key": "h2h",
-                        "outcomes": [
-                            {"name": "Fighter A", "price": 130},
-                            {"name": "Fighter B", "price": -150},
-                        ],
-                    }
-                ],
-            },
-        ],
+        "home_team": home_team,
+        "away_team": away_team,
     }
+    if bookmakers is not None:
+        payload["bookmakers"] = bookmakers
+    return payload
 
 
-def test_the_odds_api_normalizes_mma_events_and_american_moneylines():
+def bookmakers(home="Fighter A", away="Fighter B", update="2026-08-15T18:00:00Z"):
+    return [
+        {
+            "key": "book-one",
+            "title": "Book One",
+            "last_update": update,
+            "markets": [
+                {
+                    "key": "h2h",
+                    "outcomes": [
+                        {"name": home, "price": 125},
+                        {"name": away, "price": -145},
+                    ],
+                }
+            ],
+        }
+    ]
+
+
+def normalized_event(event_id, home="Fighter A", away="Fighter B", update=None):
+    return normalize_event(
+        odds_event_payload(
+            event_id,
+            home,
+            away,
+            bookmakers(home, away, update) if update else None,
+        )
+    )
+
+
+def make_card(app):
+    return save_event(
+        app.config["DATABASE_PATH"],
+        promotion="UFC",
+        name="UFC Test Card",
+        event_date="2026-08-15",
+        fights=[
+            FightInput(
+                "Manual A", "Manual B", None, None, None, 1,
+                None, None, None, None, None, None, None,
+            )
+        ],
+    )
+
+
+class FakeProvider:
+    provider_name = "the_odds_api"
+
+    def __init__(self, discoveries, odds):
+        self.discoveries = discoveries
+        self.odds = odds
+        self.last_quota = QuotaInfo(remaining=91, used=9, last_cost=1)
+        self.discover_calls = []
+        self.odds_calls = []
+
+    def discover_events(self, event_ids=None):
+        self.discover_calls.append(tuple(event_ids) if event_ids is not None else None)
+        if event_ids is None:
+            return list(self.discoveries)
+        wanted = set(event_ids)
+        return [event for event in self.discoveries if event.provider_event_id in wanted]
+
+    def fetch_odds(self, event_ids):
+        self.odds_calls.append(tuple(event_ids))
+        wanted = set(event_ids)
+        return [event for event in self.odds if event.provider_event_id in wanted]
+
+
+def test_discovery_uses_quota_free_events_endpoint_and_no_odds_request():
     fake = FakeHTTP([HTTPResponse(200, {}, [odds_event_payload()])])
     provider = TheOddsAPIProvider("secret-key", http_get=fake.get)
 
-    events = provider.upcoming_events()
+    events = provider.discover_events()
 
     assert len(events) == 1
-    event = events[0]
-    assert event.provider_event_id == "event-123"
-    assert event.commence_time == "2026-08-16T00:00:00Z"
-    assert event.home_team == "Fighter A"
-    assert event.bookmakers[0].outcomes[0].moneyline == 125
-    assert fake.calls[0][0].endswith("/v4/sports/mma_mixed_martial_arts/odds")
-    assert fake.calls[0][1]["markets"] == "h2h"
-    assert fake.calls[0][1]["oddsFormat"] == "american"
+    assert events[0].commence_time == "2026-08-16T00:00:00Z"
+    assert events[0].bookmakers == ()
+    assert fake.calls[0][0].endswith("/v4/sports/mma_mixed_martial_arts/events")
+    assert all(not call[0].endswith("/odds") for call in fake.calls)
     assert fake.calls[0][1]["dateFormat"] == "iso"
 
 
-def test_missing_bookmakers_are_normalized_without_losing_the_event():
-    payload = dict(odds_event_payload())
-    payload["bookmakers"] = None
-
-    event = normalize_event(payload)
-
-    assert event.bookmakers == ()
-
-
-def test_the_odds_api_normalizes_event_odds_and_scores():
+def test_odds_request_is_batched_and_limited_to_selected_event_ids():
     fake = FakeHTTP(
-        [
-            HTTPResponse(200, {}, odds_event_payload()),
-            HTTPResponse(
-                200,
-                {},
-                [
-                    {
-                        "id": "event-123",
-                        "completed": True,
-                        "scores": [
-                            {"name": "Fighter A", "score": "2"},
-                            {"name": "Fighter B", "score": "0"},
-                        ],
-                    }
-                ],
-            ),
-        ]
+        [HTTPResponse(200, {}, [odds_event_payload("event-1", bookmakers=bookmakers())])]
     )
     provider = TheOddsAPIProvider("secret-key", http_get=fake.get)
 
-    odds = provider.get_odds("event-123")
-    result = provider.get_results("event-123")
+    events = provider.fetch_odds(["event-1", "event-3", "event-1"])
 
-    assert odds.bookmakers[1].outcomes[1].moneyline == -150
-    assert result.status == "completed"
-    assert result.winner == "Fighter A"
-    assert fake.calls[1][0].endswith("/v4/sports/mma_mixed_martial_arts/scores")
-    assert fake.calls[1][1]["daysFrom"] == "3"
+    assert len(events) == 1
+    assert fake.calls[0][0].endswith("/v4/sports/mma_mixed_martial_arts/odds")
+    assert fake.calls[0][1]["eventIds"] == "event-1,event-3"
+    assert fake.calls[0][1]["markets"] == "h2h"
+    assert fake.calls[0][1]["oddsFormat"] == "american"
 
 
-def test_provider_classifies_missing_key_quota_and_not_found_errors():
-    with pytest.raises(OddsProviderAuthenticationError):
-        TheOddsAPIProvider(None).upcoming_events()
-
-    quota = FakeHTTP(
-        [
-            HTTPResponse(
-                429,
-                {"x-requests-remaining": "0"},
-                {"error_code": "EXCEEDED_FREQ_LIMIT", "message": "slow down"},
-            )
-        ]
-    )
-    with pytest.raises(OddsProviderQuotaExceeded) as quota_error:
-        TheOddsAPIProvider("secret-key", http_get=quota.get).upcoming_events()
-    assert quota_error.value.headers["x-requests-remaining"] == "0"
-
-    not_found = FakeHTTP([HTTPResponse(404, {}, {"error_code": "EVENT_NOT_FOUND"})])
-    with pytest.raises(OddsProviderNotFound):
-        TheOddsAPIProvider("secret-key", http_get=not_found.get).get_odds("event-123")
+def test_missing_bookmakers_are_normalized_without_losing_event():
+    assert normalize_event(odds_event_payload()).bookmakers == ()
 
 
 def test_malformed_required_event_data_is_rejected():
     payload = odds_event_payload()
     payload["commence_time"] = "not-a-timestamp"
-
     with pytest.raises(OddsProviderResponseError):
         normalize_event(payload)
 
 
-def test_provider_event_import_persists_external_identity_and_odds_snapshots(tmp_path):
-    app = create_app(AppConfig(database_path=tmp_path / "tracker.db"))
-    provider = TheOddsAPIProvider(
-        "secret-key",
-        http_get=FakeHTTP([]).get,
+def test_successful_response_captures_quota_headers():
+    fake = FakeHTTP(
+        [
+            HTTPResponse(
+                200,
+                {
+                    "x-requests-remaining": "42",
+                    "x-requests-used": "8",
+                    "x-requests-last": "1",
+                },
+                [],
+            )
+        ]
     )
-    normalized = normalize_event(odds_event_payload())
+    provider = TheOddsAPIProvider("secret-key", http_get=fake.get)
 
-    imported = import_provider_event(app.config["DATABASE_PATH"], normalized)
-    repeated = import_provider_event(app.config["DATABASE_PATH"], normalized)
+    provider.discover_events()
 
-    assert imported.event_id == repeated.event_id
-    assert imported.fight_id == repeated.fight_id
-    with connect(app.config["DATABASE_PATH"]) as connection:
-        event = connection.execute(
-            "SELECT external_provider, external_id, status FROM events WHERE id = ?",
-            (imported.event_id,),
-        ).fetchone()
-        fight = connection.execute(
-            "SELECT fighter_a, fighter_b, scheduled_at, external_id FROM fights WHERE id = ?",
-            (imported.fight_id,),
-        ).fetchone()
-        snapshot_count = connection.execute(
-            "SELECT COUNT(*) FROM odds_snapshots WHERE fight_id = ?",
-            (imported.fight_id,),
-        ).fetchone()[0]
+    assert provider.last_quota == QuotaInfo(remaining=42, used=8, last_cost=1)
 
-    assert tuple(event) == ("the_odds_api", "event-123", "draft")
-    assert tuple(fight) == (
-        "Fighter A",
-        "Fighter B",
-        "2026-08-16T00:00:00Z",
-        "event-123",
+
+def test_provider_classifies_auth_quota_and_not_found_errors():
+    with pytest.raises(OddsProviderAuthenticationError):
+        TheOddsAPIProvider(None).discover_events()
+
+    quota = FakeHTTP(
+        [HTTPResponse(429, {"x-requests-remaining": "0"}, {"error_code": "EXCEEDED_FREQ_LIMIT"})]
     )
-    assert snapshot_count == 4
-    assert len(imported.odds_snapshot_ids) == 4
-    assert provider.api_key == "secret-key"
+    with pytest.raises(OddsProviderQuotaExceeded) as quota_error:
+        TheOddsAPIProvider("secret-key", http_get=quota.get).discover_events()
+    assert quota_error.value.quota == QuotaInfo(remaining=0)
+
+    not_found = FakeHTTP([HTTPResponse(404, {}, {"error_code": "EVENT_NOT_FOUND"})])
+    with pytest.raises(OddsProviderNotFound):
+        TheOddsAPIProvider("secret-key", http_get=not_found.get).discover_events(["missing"])
 
 
-def test_provider_transport_failures_are_classified_without_retrying_live_calls():
-    def failed_request(url, params, timeout):
-        raise OSError("network unavailable")
-
+def test_timeout_and_transport_failures_are_classified_without_retry():
+    timeout = FakeHTTP([httpx.ReadTimeout("timed out")])
     with pytest.raises(OddsProviderUnavailable):
-        TheOddsAPIProvider("secret-key", http_get=failed_request).upcoming_events()
+        TheOddsAPIProvider("secret-key", http_get=timeout.get).discover_events()
+    assert len(timeout.calls) == 1
+
+    failed = FakeHTTP([OSError("network unavailable")])
+    with pytest.raises(OddsProviderUnavailable):
+        TheOddsAPIProvider("secret-key", http_get=failed.get).discover_events()
+    assert len(failed.calls) == 1
 
 
-def test_wager_from_snapshot_preserves_the_exact_moneyline_and_sportsbook(tmp_path):
+def test_mma_result_lookup_is_not_part_of_provider_contract():
+    assert not hasattr(TheOddsAPIProvider("secret-key"), "get_results")
+
+
+def test_selected_provider_bouts_share_one_user_card_and_unselected_bout_is_not_saved(tmp_path):
     app = create_app(AppConfig(database_path=tmp_path / "tracker.db"))
-    imported = import_provider_event(
-        app.config["DATABASE_PATH"], normalize_event(odds_event_payload())
-    )
+    card_id = make_card(app)
+    discoveries = [normalized_event("bout-1"), normalized_event("bout-2", "C", "D"), normalized_event("bout-3", "E", "F")]
+    odds = [normalized_event("bout-1", update="2026-08-15T18:00:00Z"), normalized_event("bout-3", "E", "F", "2026-08-15T18:01:00Z")]
+    provider = FakeProvider(discoveries, odds)
 
+    result = import_selected_bouts(app.config["DATABASE_PATH"], card_id, provider, ["bout-1", "bout-3"])
+
+    assert result.event_id == card_id
+    assert provider.discover_calls == [("bout-1", "bout-3")]
+    assert provider.odds_calls == [("bout-1", "bout-3")]
     with connect(app.config["DATABASE_PATH"]) as connection:
-        analyst_id = connection.execute(
-            "SELECT id FROM analysts WHERE slug = 'theweasle'"
-        ).fetchone()[0]
-        snapshot = connection.execute(
-            """
-            SELECT id FROM odds_snapshots
-            WHERE fight_id = ? AND fighter = 'Fighter A'
-            ORDER BY id
-            LIMIT 1
-            """,
-            (imported.fight_id,),
-        ).fetchone()
-        prediction_cursor = connection.execute(
-            """
-            INSERT INTO predictions(fight_id, analyst_id, picked_fighter, confidence)
-            VALUES (?, ?, 'Fighter A', 70)
-            """,
-            (imported.fight_id, analyst_id),
-        )
-        prediction_id = prediction_cursor.lastrowid
+        event = connection.execute("SELECT name, promotion, event_date, external_id FROM events WHERE id = ?", (card_id,)).fetchone()
+        fights = connection.execute("SELECT external_id, bout_order FROM fights WHERE event_id = ? ORDER BY bout_order", (card_id,)).fetchall()
+    assert tuple(event) == ("UFC Test Card", "UFC", "2026-08-15", None)
+    assert [(row["external_id"], row["bout_order"]) for row in fights] == [(None, 1), ("bout-1", 2), ("bout-3", 3)]
 
-    wager_id = place_wager_from_snapshot(
+
+def test_provider_import_failure_does_not_change_existing_card(tmp_path):
+    app = create_app(AppConfig(database_path=tmp_path / "tracker.db"))
+    card_id = make_card(app)
+    provider = FakeProvider([], [])
+
+    with pytest.raises(OddsImportError):
+        import_selected_bouts(app.config["DATABASE_PATH"], card_id, provider, ["missing"])
+    with connect(app.config["DATABASE_PATH"]) as connection:
+        assert connection.execute("SELECT name FROM events WHERE id = ?", (card_id,)).fetchone()[0] == "UFC Test Card"
+        assert connection.execute("SELECT COUNT(*) FROM fights WHERE event_id = ?", (card_id,)).fetchone()[0] == 1
+
+
+def test_refresh_and_edit_preserve_provider_identity_without_duplicate(tmp_path):
+    app = create_app(AppConfig(database_path=tmp_path / "tracker.db"))
+    card_id = make_card(app)
+    discovered = [normalized_event("bout-1")]
+    provider = FakeProvider(discovered, [normalized_event("bout-1", update="2026-08-15T18:00:00Z")])
+    imported = import_selected_bouts(app.config["DATABASE_PATH"], card_id, provider, ["bout-1"])
+    with connect(app.config["DATABASE_PATH"]) as connection:
+        old = connection.execute("SELECT id, scheduled_at FROM fights WHERE external_id = 'bout-1'").fetchone()
+
+    save_event(
         app.config["DATABASE_PATH"],
-        prediction_id=prediction_id,
-        odds_snapshot_id=snapshot[0],
-        stake_cents=50,
+        event_id=card_id,
+        promotion="UFC",
+        name="Renamed Card",
+        event_date="2026-08-16",
+        fights=[
+            FightInput("Manual A", "Manual B", None, None, "early_prelim", 1, None, None, None, None, None, None, None),
+            FightInput("Fighter A", "Fighter B", "lightweight", "male", "main_card", 2, None, None, None, None, None, None, None),
+        ],
     )
+    refresh_odds_for_card(app.config["DATABASE_PATH"], card_id, provider)
 
     with connect(app.config["DATABASE_PATH"]) as connection:
-        wager = connection.execute(
-            "SELECT odds_snapshot_id, moneyline, sportsbook FROM wagers WHERE id = ?",
-            (wager_id,),
-        ).fetchone()
-
-    assert tuple(wager) == (snapshot[0], 125, "Book One")
+        rows = connection.execute("SELECT id, external_provider, external_id, scheduled_at FROM fights WHERE event_id = ? AND external_id = 'bout-1'", (card_id,)).fetchall()
+    assert len(rows) == 1
+    assert tuple(rows[0][1:]) == ("the_odds_api", "bout-1", old["scheduled_at"])
+    assert rows[0]["id"] != imported.event_id
 
 
-def test_imported_snapshot_survives_card_edit_and_is_linked_to_the_wager(tmp_path):
+def test_exact_snapshot_selection_rejects_opponent_line_and_preserves_selected_line(tmp_path):
     app = create_app(AppConfig(database_path=tmp_path / "tracker.db"))
-    imported = import_provider_event(
-        app.config["DATABASE_PATH"], normalize_event(odds_event_payload())
-    )
-    client = app.test_client()
-
-    response = client.post(
-        f"/events/{imported.event_id}/edit",
-        data={
-            "promotion": "MMA",
-            "name": "Fighter A vs Fighter B",
-            "event_date": "2026-08-16",
-            "fight_count": "15",
-            "bout_order_1": "1",
-            "fighter_a_1": "Fighter A",
-            "fighter_b_1": "Fighter B",
-            "analyst_1": "theweasle",
-            "picked_fighter_1": "fighter_a",
-            "confidence_1": "70",
-            "predicted_method_1": "decision",
-            "gender_1": "",
-            "weight_class_1": "",
-            "card_section_1": "",
-            "moneyline_1": "125",
-            "sportsbook_1": "Book One",
-            "stake_1": "0.50",
-            "odds_snapshot_1": str(imported.odds_snapshot_ids[0]),
-        },
-    )
-
-    assert response.status_code == 302
+    card_id = make_card(app)
+    provider_event = normalized_event("bout-1", update="2026-08-15T18:00:00Z")
+    provider = FakeProvider([provider_event], [provider_event])
+    imported = import_selected_bouts(app.config["DATABASE_PATH"], card_id, provider, ["bout-1"])
     with connect(app.config["DATABASE_PATH"]) as connection:
-        wager = connection.execute(
-            """
-            SELECT w.odds_snapshot_id, w.moneyline, w.sportsbook,
-                   os.external_provider, os.fighter
-            FROM wagers w
-            JOIN odds_snapshots os ON os.id = w.odds_snapshot_id
-            """
-        ).fetchone()
+        analyst_id = connection.execute("SELECT id FROM analysts WHERE slug = 'theweasle'").fetchone()[0]
+        fight_id = connection.execute("SELECT id FROM fights WHERE external_id = 'bout-1'").fetchone()[0]
+        prediction_id = connection.execute("INSERT INTO predictions(fight_id, analyst_id, picked_fighter, confidence) VALUES (?, ?, 'Fighter A', 70)", (fight_id, analyst_id)).lastrowid
+        opponent_snapshot = connection.execute("SELECT id FROM odds_snapshots WHERE fight_id = ? AND fighter = 'Fighter B'", (fight_id,)).fetchone()[0]
+        picked_snapshot = connection.execute("SELECT id FROM odds_snapshots WHERE fight_id = ? AND fighter = 'Fighter A'", (fight_id,)).fetchone()[0]
 
-    assert tuple(wager) == (wager[0], 125, "Book One", "the_odds_api", "Fighter A")
+    with pytest.raises(OddsImportError):
+        place_wager_from_snapshot(app.config["DATABASE_PATH"], prediction_id=prediction_id, odds_snapshot_id=opponent_snapshot, stake_cents=50)
+    wager_id = place_wager_from_snapshot(app.config["DATABASE_PATH"], prediction_id=prediction_id, odds_snapshot_id=picked_snapshot, stake_cents=50)
+    with connect(app.config["DATABASE_PATH"]) as connection:
+        wager = connection.execute("SELECT odds_snapshot_id, moneyline, sportsbook FROM wagers WHERE id = ?", (wager_id,)).fetchone()
+    assert tuple(wager) == (picked_snapshot, 125, "Book One")
+    assert imported.odds_snapshot_ids
 
 
-def test_import_odds_route_uses_provider_boundary_without_a_live_request(tmp_path, monkeypatch):
+def test_stale_snapshots_are_kept_but_newest_remains_latest_and_wager_is_historical(tmp_path):
     app = create_app(AppConfig(database_path=tmp_path / "tracker.db"))
-    normalized = normalize_event(odds_event_payload())
-
-    class FakeProvider:
-        def upcoming_events(self):
-            return [normalized]
-
-    monkeypatch.setattr(web_routes, "TheOddsAPIProvider", lambda *args, **kwargs: FakeProvider())
-
-    response = app.test_client().post("/events/import")
-
-    assert response.status_code == 302
+    card_id = make_card(app)
+    newer = normalized_event("bout-1", update="2026-08-15T19:00:00Z")
+    older = normalized_event("bout-1", update="2026-08-15T18:00:00Z")
+    provider = FakeProvider([newer], [newer])
+    import_selected_bouts(app.config["DATABASE_PATH"], card_id, provider, ["bout-1"])
     with connect(app.config["DATABASE_PATH"]) as connection:
-        assert connection.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 1
+        fight_id = connection.execute("SELECT id FROM fights WHERE external_id = 'bout-1'").fetchone()[0]
+        analyst_id = connection.execute("SELECT id FROM analysts WHERE slug = 'theweasle'").fetchone()[0]
+        prediction_id = connection.execute("INSERT INTO predictions(fight_id, analyst_id, picked_fighter, confidence) VALUES (?, ?, 'Fighter A', 70)", (fight_id, analyst_id)).lastrowid
+        selected = connection.execute("SELECT id FROM odds_snapshots WHERE fight_id = ? AND fighter = 'Fighter A'", (fight_id,)).fetchone()[0]
+    place_wager_from_snapshot(app.config["DATABASE_PATH"], prediction_id=prediction_id, odds_snapshot_id=selected, stake_cents=50)
+    provider.odds = [older]
+    refresh_odds_for_card(app.config["DATABASE_PATH"], card_id, provider)
+    with connect(app.config["DATABASE_PATH"]) as connection:
+        snapshots = connection.execute("SELECT captured_at FROM odds_snapshots WHERE fight_id = ? AND fighter = 'Fighter A' ORDER BY captured_at DESC", (fight_id,)).fetchall()
+        wager = connection.execute("SELECT odds_snapshot_id, moneyline FROM wagers WHERE prediction_id = ?", (prediction_id,)).fetchone()
+    assert [row[0] for row in snapshots] == ["2026-08-15T19:00:00Z", "2026-08-15T18:00:00Z"]
+    assert tuple(wager) == (selected, 125)
+
+
+def test_web_discovery_is_explicit_and_surfaces_quota_without_live_request(tmp_path, monkeypatch):
+    app = create_app(AppConfig(database_path=tmp_path / "tracker.db"))
+    card_id = make_card(app)
+    provider_event = normalized_event("bout-1")
+    provider = FakeProvider([provider_event], [normalized_event("bout-1", update="2026-08-15T18:00:00Z")])
+    monkeypatch.setattr(web_routes, "TheOddsAPIProvider", lambda *args, **kwargs: provider)
+
+    discovery = app.test_client().get(f"/events/{card_id}/provider-bouts")
+
+    assert discovery.status_code == 200
+    assert b"Quota: remaining 91, last request cost 1" in discovery.data
+    assert provider.discover_calls == [None]
+    assert provider.odds_calls == []
+
+    imported = app.test_client().post(
+        f"/events/{card_id}/provider-bouts",
+        data={"provider_event_id": "bout-1"},
+    )
+    assert imported.status_code == 302
+    assert provider.odds_calls == [("bout-1",)]

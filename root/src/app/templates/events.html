@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 {% block title %}Events · MMA Picks Tracker{% endblock %}
 {% block content %}
-<div class="page-heading"><div><p class="eyebrow">Tracker</p><h1>Events</h1></div><div class="form-actions"><form method="post" action="{{ url_for('web.import_events') }}"><button class="button secondary" type="submit">Import Odds</button></form><a class="button" href="{{ url_for('web.new_event') }}">New Card</a></div></div>
+<div class="page-heading"><div><p class="eyebrow">Tracker</p><h1>Events</h1></div><div class="form-actions"><a class="button" href="{{ url_for('web.new_event') }}">New Card</a></div></div>
 <section class="panel">
 {% if events %}
 <table><thead><tr><th>Date</th><th>Event</th><th>Promotion</th><th>Fights</th><th>Status</th></tr></thead>
 <tbody>{% for event in events %}<tr>
     <td>{{ event.event_date }}</td>
-    <td><a href="{{ url_for('web.event_detail', event_id=event.id) }}">{{ event.name }}</a></td>
+    <td><a href="{{ url_for('web.event_detail', event_id=event.id) }}">{{ event.name }}</a>{% if event.status not in ['completed', 'canceled'] %}<br><a class="muted" href="{{ url_for('web.provider_bouts', event_id=event.id) }}">Discover provider bouts</a>{% endif %}</td>
     <td>{{ event.promotion }}</td><td>{{ event.fight_count }}</td><td>{{ event.status }}</td>
 </tr>{% endfor %}</tbody></table>
 {% else %}<p class="muted">No events tracked yet.</p>{% endif %}

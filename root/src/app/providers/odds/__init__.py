@@ -7,9 +7,9 @@ from .base import (
     OddsProviderError,
     OddsProviderNotFound,
     OddsProviderQuotaExceeded,
-    OddsProviderUnavailable,
     OddsProviderResponseError,
-    OddsResult,
+    OddsProviderUnavailable,
+    QuotaInfo,
 )
 from .the_odds_api import TheOddsAPIProvider, normalize_event, normalize_events
 
@@ -22,9 +22,9 @@ __all__ = [
     "OddsProviderError",
     "OddsProviderNotFound",
     "OddsProviderQuotaExceeded",
-    "OddsProviderUnavailable",
     "OddsProviderResponseError",
-    "OddsResult",
+    "OddsProviderUnavailable",
+    "QuotaInfo",
     "TheOddsAPIProvider",
     "normalize_event",
     "normalize_events",

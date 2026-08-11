@@ -7,35 +7,29 @@
 <div class="page-heading"><div><p class="eyebrow">Manual tracker</p><h1>{{ 'Edit' if edit else 'New' }} card</h1></div></div>
 <form method="post" class="card-form">
     <input type="hidden" name="fight_count" value="15">
-    <section class="panel form-panel">
-        <div class="form-grid">
-            <label>Promotion<input name="promotion" value="{{ request.form.get('promotion', event.promotion if event else 'UFC') }}" required></label>
-            <label>Event name<input name="name" value="{{ request.form.get('name', event.name if event else '') }}" required></label>
-            <label>Event date<input type="date" name="event_date" value="{{ request.form.get('event_date', event.event_date if event else '') }}" required></label>
-        </div>
-    </section>
-    <section class="panel table-panel">
-        <div class="section-heading"><h2>Fight card</h2><span class="muted">Blank rows are ignored. Prediction and wager fields may be completed later.</span></div>
-        <div class="table-scroll"><table class="entry-table">
-            <thead><tr><th>#</th><th>Fighter A</th><th>Fighter B</th><th>Pick</th><th>Confidence</th><th>Method</th><th>Gender</th><th>Division</th><th>Section</th><th>Moneyline</th><th>Sportsbook</th><th>Stake</th></tr></thead>
-            <tbody>{% for row in rows %}{% set i = loop.index %}<tr>
-                <td><input class="small-input" name="bout_order_{{ i }}" value="{{ value(row, 'bout_order', i, i) }}"></td>
-                <td><input name="fighter_a_{{ i }}" value="{{ value(row, 'fighter_a', i) }}"></td>
-                <td><input name="fighter_b_{{ i }}" value="{{ value(row, 'fighter_b', i) }}"></td>
-                <td><select name="picked_fighter_{{ i }}"><option value="">&mdash;</option><option value="fighter_a" {% if value(row, 'picked_side', i) == 'fighter_a' %}selected{% endif %}>A</option><option value="fighter_b" {% if value(row, 'picked_side', i) == 'fighter_b' %}selected{% endif %}>B</option></select></td>
-                <td><input class="small-input" type="number" min="0" max="100" name="confidence_{{ i }}" value="{{ value(row, 'confidence', i) }}"></td>
-                <td><input name="predicted_method_{{ i }}" value="{{ value(row, 'predicted_method', i) }}"></td>
-                <td><select name="gender_{{ i }}"><option value="">&mdash;</option>{% for option in ['male', 'female'] %}<option value="{{ option }}" {% if value(row, 'gender', i) == option %}selected{% endif %}>{{ option }}</option>{% endfor %}</select></td>
-                <td><input name="weight_class_{{ i }}" value="{{ value(row, 'weight_class', i) }}"></td>
-                <td><select name="card_section_{{ i }}"><option value="">&mdash;</option>{% for option in ['early_prelim', 'prelim', 'main_card'] %}<option value="{{ option }}" {% if value(row, 'card_section', i) == option %}selected{% endif %}>{{ option|replace('_', ' ')|title }}</option>{% endfor %}</select></td>
-                <td><input class="small-input" type="number" name="moneyline_{{ i }}" value="{{ value(row, 'moneyline', i) }}"></td>
-                <td><input name="sportsbook_{{ i }}" value="{{ value(row, 'sportsbook', i) }}"></td>
-                <td><input class="small-input" type="number" min="0.01" step="0.01" name="stake_{{ i }}" value="{{ value(row, 'stake', i) }}" placeholder="{{ default_stake }}"></td>
-                <input type="hidden" name="odds_snapshot_{{ i }}" value="{{ value(row, 'odds_snapshot_id', i) }}">
-                <input type="hidden" name="analyst_{{ i }}" value="{{ value(row, 'analyst_slug', i, 'theweasle') }}">
-            </tr>{% endfor %}</tbody>
-        </table></div>
-    </section>
+    <section class="panel form-panel"><div class="form-grid">
+        <label>Promotion<input name="promotion" value="{{ request.form.get('promotion', event.promotion if event else 'UFC') }}" required></label>
+        <label>Event name<input name="name" value="{{ request.form.get('name', event.name if event else '') }}" required></label>
+        <label>Event date<input type="date" name="event_date" value="{{ request.form.get('event_date', event.event_date if event else '') }}" required></label>
+    </div></section>
+    <section class="panel table-panel"><div class="section-heading"><h2>Fight card</h2><span class="muted">Choose a provider snapshot explicitly, or enter a manual line.</span></div>
+    <div class="table-scroll"><table class="entry-table"><thead><tr><th>#</th><th>Fighter A</th><th>Fighter B</th><th>Pick</th><th>Confidence</th><th>Method</th><th>Gender</th><th>Division</th><th>Section</th><th>Provider line</th><th>Moneyline</th><th>Sportsbook</th><th>Stake</th></tr></thead>
+    <tbody>{% for row in rows %}{% set i = loop.index %}<tr>
+        <td><input class="small-input" name="bout_order_{{ i }}" value="{{ value(row, 'bout_order', i, i) }}"></td>
+        <td><input name="fighter_a_{{ i }}" value="{{ value(row, 'fighter_a', i) }}"></td>
+        <td><input name="fighter_b_{{ i }}" value="{{ value(row, 'fighter_b', i) }}"></td>
+        <td><select name="picked_fighter_{{ i }}"><option value="">—</option><option value="fighter_a" {% if value(row, 'picked_side', i) == 'fighter_a' %}selected{% endif %}>A</option><option value="fighter_b" {% if value(row, 'picked_side', i) == 'fighter_b' %}selected{% endif %}>B</option></select></td>
+        <td><input class="small-input" type="number" min="0" max="100" name="confidence_{{ i }}" value="{{ value(row, 'confidence', i) }}"></td>
+        <td><input name="predicted_method_{{ i }}" value="{{ value(row, 'predicted_method', i) }}"></td>
+        <td><select name="gender_{{ i }}"><option value="">—</option>{% for option in ['male', 'female'] %}<option value="{{ option }}" {% if value(row, 'gender', i) == option %}selected{% endif %}>{{ option }}</option>{% endfor %}</select></td>
+        <td><input name="weight_class_{{ i }}" value="{{ value(row, 'weight_class', i) }}"></td>
+        <td><select name="card_section_{{ i }}"><option value="">—</option>{% for option in ['early_prelim', 'prelim', 'main_card'] %}<option value="{{ option }}" {% if value(row, 'card_section', i) == option %}selected{% endif %}>{{ option|replace('_', ' ')|title }}</option>{% endfor %}</select></td>
+        <td><select name="odds_snapshot_{{ i }}"><option value="">Manual line</option>{% if row and row.get('odds_snapshots') %}{% for snapshot in row.odds_snapshots %}<option value="{{ snapshot.id }}" {% if value(row, 'odds_snapshot_id', i) == snapshot.id %}selected{% endif %}>{{ snapshot.fighter }} · {{ snapshot.sportsbook }} {{ '%+d'|format(snapshot.moneyline) }} · {{ snapshot.captured_at }}</option>{% endfor %}{% endif %}</select></td>
+        <td><input class="small-input" type="number" name="moneyline_{{ i }}" value="{{ value(row, 'moneyline', i) }}" placeholder="manual"></td>
+        <td><input name="sportsbook_{{ i }}" value="{{ value(row, 'sportsbook', i) }}" placeholder="manual"></td>
+        <td><input class="small-input" type="number" min="0.01" step="0.01" name="stake_{{ i }}" value="{{ value(row, 'stake', i) }}" placeholder="{{ default_stake }}"></td>
+        <input type="hidden" name="analyst_{{ i }}" value="{{ value(row, 'analyst_slug', i, 'theweasle') }}">
+    </tr>{% endfor %}</tbody></table></div></section>
     <div class="form-actions"><button class="button" type="submit">Save Card</button><a href="{{ url_for('web.events') }}">Cancel</a></div>
 </form>
 {% endblock %}

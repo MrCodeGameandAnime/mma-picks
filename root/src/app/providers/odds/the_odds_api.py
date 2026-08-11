@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Callable, Mapping
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from typing import Any, Callable, Mapping, Sequence
+
+import httpx
 
 from .base import (
     BookmakerOdds,
@@ -18,7 +16,7 @@ from .base import (
     OddsProviderQuotaExceeded,
     OddsProviderResponseError,
     OddsProviderUnavailable,
-    OddsResult,
+    QuotaInfo,
 )
 
 
@@ -40,35 +38,26 @@ def _default_http_get(
     params: Mapping[str, str],
     timeout: float,
 ) -> HTTPResponse:
-    request_url = f"{url}?{urlencode(params)}"
-    request = Request(request_url, headers={"Accept": "application/json"})
     try:
-        with urlopen(request, timeout=timeout) as response:
-            body = response.read().decode("utf-8")
-            try:
-                payload = json.loads(body) if body else None
-            except json.JSONDecodeError:
-                payload = None
-            return HTTPResponse(
-                status_code=response.status,
-                headers=dict(response.headers.items()),
-                payload=payload,
-            )
-    except HTTPError as exc:
-        body = exc.read().decode("utf-8") if exc.fp else ""
-        try:
-            payload = json.loads(body) if body else None
-        except json.JSONDecodeError:
-            payload = None
-        return HTTPResponse(
-            status_code=exc.code,
-            headers=dict(exc.headers.items()),
-            payload=payload,
+        response = httpx.get(
+            url,
+            params=dict(params),
+            timeout=timeout,
+            headers={"Accept": "application/json"},
         )
-    except URLError as exc:
-        raise OddsProviderUnavailable("The Odds API could not be reached") from exc
-    except TimeoutError as exc:
+    except httpx.TimeoutException as exc:
         raise OddsProviderUnavailable("The Odds API request timed out") from exc
+    except httpx.HTTPError as exc:
+        raise OddsProviderUnavailable("The Odds API could not be reached") from exc
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    return HTTPResponse(
+        status_code=response.status_code,
+        headers=dict(response.headers),
+        payload=payload,
+    )
 
 
 def normalize_timestamp(value: object) -> str:
@@ -176,7 +165,9 @@ def normalize_event(payload: Mapping[str, Any], default_sport_key: str = "") -> 
     return OddsEvent(
         provider_event_id=_required_text(payload.get("id"), "event id"),
         sport_key=_required_text(payload.get("sport_key") or default_sport_key, "sport key"),
-        sport_title=_required_text(payload.get("sport_title") or payload.get("sport_key"), "sport title"),
+        sport_title=_required_text(
+            payload.get("sport_title") or payload.get("sport_key"), "sport title"
+        ),
         commence_time=normalize_timestamp(payload.get("commence_time")),
         home_team=_required_text(payload.get("home_team"), "home team"),
         away_team=_required_text(payload.get("away_team"), "away team"),
@@ -190,32 +181,13 @@ def normalize_events(payload: object, default_sport_key: str = "") -> list[OddsE
     return [normalize_event(event, default_sport_key) for event in payload]
 
 
-def _result_from_payload(payload: Mapping[str, Any], event_id: str) -> OddsResult:
-    if not bool(payload.get("completed")):
-        return OddsResult(event_id, "scheduled", None)
-    scores = payload.get("scores")
-    if not isinstance(scores, list) or not scores:
-        raise OddsProviderResponseError("completed provider event is missing scores")
-    parsed_scores: list[tuple[str, float]] = []
-    for score in scores:
-        if not isinstance(score, Mapping):
-            continue
-        name = _required_text(score.get("name"), "score name")
-        try:
-            value = float(score.get("score"))
-        except (TypeError, ValueError) as exc:
-            raise OddsProviderResponseError("provider score is invalid") from exc
-        parsed_scores.append((name, value))
-    if len(parsed_scores) < 2:
-        raise OddsProviderResponseError("completed provider event has incomplete scores")
-    if parsed_scores[0][1] == parsed_scores[1][1]:
-        return OddsResult(event_id, "draw", None)
-    winner = max(parsed_scores, key=lambda item: item[1])[0]
-    return OddsResult(event_id, "completed", winner)
+def _event_ids(event_ids: Sequence[str]) -> str:
+    unique = list(dict.fromkeys(str(event_id).strip() for event_id in event_ids if str(event_id).strip()))
+    return ",".join(unique)
 
 
 class TheOddsAPIProvider:
-    """The Odds API v4 adapter with an injectable HTTP transport for tests."""
+    """The Odds API v4 adapter with an injectable httpx-compatible boundary."""
 
     provider_name = "the_odds_api"
 
@@ -237,6 +209,7 @@ class TheOddsAPIProvider:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self._http_get = http_get or _default_http_get
+        self.last_quota: QuotaInfo | None = None
 
     def _request(self, path: str, params: Mapping[str, str]) -> object:
         if not self.api_key:
@@ -252,19 +225,23 @@ class TheOddsAPIProvider:
             )
         except OddsProviderError:
             raise
+        except (httpx.TimeoutException, TimeoutError) as exc:
+            raise OddsProviderUnavailable("The Odds API request timed out") from exc
         except Exception as exc:
             raise OddsProviderUnavailable("The Odds API request failed") from exc
 
+        self.last_quota = QuotaInfo.from_headers(dict(response.headers))
         payload = response.json()
         error_code = payload.get("error_code") if isinstance(payload, Mapping) else None
         message = payload.get("message") if isinstance(payload, Mapping) else None
+        error_kwargs = {
+            "status_code": response.status_code,
+            "error_code": str(error_code) if error_code else None,
+            "headers": dict(response.headers),
+            "quota": self.last_quota,
+        }
         if response.status_code >= 400 or error_code:
             error_message = str(message or error_code or "The Odds API request failed")
-            error_kwargs = {
-                "status_code": response.status_code,
-                "error_code": str(error_code) if error_code else None,
-                "headers": dict(response.headers),
-            }
             if response.status_code == 429 or error_code in {
                 "EXCEEDED_FREQ_LIMIT",
                 "OUT_OF_USAGE_CREDITS",
@@ -283,51 +260,24 @@ class TheOddsAPIProvider:
             raise OddsProviderResponseError(error_message, **error_kwargs)
         return payload
 
-    def upcoming_events(self) -> list[OddsEvent]:
+    def discover_events(self, event_ids: Sequence[str] | None = None) -> list[OddsEvent]:
+        params: dict[str, str] = {}
+        if event_ids:
+            params["eventIds"] = _event_ids(event_ids)
+        payload = self._request(f"/v4/sports/{self.sport_key}/events", params)
+        return normalize_events(payload, self.sport_key)
+
+    def fetch_odds(self, event_ids: Sequence[str]) -> list[OddsEvent]:
+        selected = _event_ids(event_ids)
+        if not selected:
+            return []
         payload = self._request(
             f"/v4/sports/{self.sport_key}/odds",
             {
+                "eventIds": selected,
                 "regions": self.regions,
                 "markets": self.markets,
                 "oddsFormat": "american",
             },
         )
         return normalize_events(payload, self.sport_key)
-
-    def get_event(self, event_id: str) -> OddsEvent:
-        payload = self._request(
-            f"/v4/sports/{self.sport_key}/events",
-            {"eventIds": event_id},
-        )
-        events = normalize_events(payload, self.sport_key)
-        if not events:
-            raise OddsProviderNotFound(f"provider event {event_id} was not found")
-        return events[0]
-
-    def get_odds(self, event_id: str) -> OddsEvent:
-        payload = self._request(
-            f"/v4/sports/{self.sport_key}/events/{event_id}/odds",
-            {
-                "regions": self.regions,
-                "markets": self.markets,
-                "oddsFormat": "american",
-            },
-        )
-        if not isinstance(payload, Mapping):
-            raise OddsProviderResponseError("provider event odds response must be an object")
-        return normalize_event(payload, self.sport_key)
-
-    def get_results(self, event_id: str) -> OddsResult:
-        payload = self._request(
-            f"/v4/sports/{self.sport_key}/scores",
-            {"eventIds": event_id, "daysFrom": "3"},
-        )
-        if not isinstance(payload, list):
-            raise OddsProviderResponseError("provider scores response must be a list")
-        event_payload = next(
-            (event for event in payload if isinstance(event, Mapping) and event.get("id") == event_id),
-            None,
-        )
-        if event_payload is None:
-            raise OddsProviderNotFound(f"provider result {event_id} was not found")
-        return _result_from_payload(event_payload, event_id)

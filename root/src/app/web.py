@@ -3,7 +3,7 @@ from __future__ import annotations
 from flask import Blueprint, current_app, flash, redirect, render_template, request, url_for
 
 from .metrics import dashboard_metrics
-from .providers.odds import OddsProviderError, TheOddsAPIProvider
+from .providers.odds import OddsProviderError, QuotaInfo, TheOddsAPIProvider
 from .services.events import (
     ValidationError,
     get_analysts,
@@ -14,7 +14,7 @@ from .services.events import (
     save_event,
 )
 from .services.settlement import settle_event
-from .services.odds import import_upcoming_events
+from .services.odds import OddsImportError, import_selected_bouts, refresh_odds_for_card
 
 
 web = Blueprint("web", __name__)
@@ -38,25 +38,75 @@ def events():
     )
 
 
-@web.post("/events/import")
-def import_events():
+def _odds_provider() -> TheOddsAPIProvider:
+    return TheOddsAPIProvider(
+        current_app.config.get("ODDS_API_KEY"),
+        sport_key=current_app.config.get("ODDS_API_SPORT_KEY", "mma_mixed_martial_arts"),
+        regions=current_app.config.get("ODDS_API_REGIONS", "us"),
+        markets=current_app.config.get("ODDS_API_MARKETS", "h2h"),
+        timeout=current_app.config.get("ODDS_API_TIMEOUT_SECONDS", 10.0),
+    )
+
+
+def _quota_message(quota: QuotaInfo | None) -> str | None:
+    if quota is None:
+        return None
+    message = quota.as_message()
+    return f"Quota: {message}" if message else None
+
+
+@web.route("/events/<int:event_id>/provider-bouts", methods=["GET", "POST"])
+def provider_bouts(event_id: int):
+    database_path = current_app.config["DATABASE_PATH"]
+    event = get_event(database_path, event_id)
+    if event is None:
+        return "Event not found", 404
+    if event["status"] in {"completed", "canceled"}:
+        flash("Completed or canceled cards cannot import provider bouts.", "error")
+        return redirect(url_for("web.event_detail", event_id=event_id))
+    provider = _odds_provider()
     try:
-        provider = TheOddsAPIProvider(
-            current_app.config.get("ODDS_API_KEY"),
-            sport_key=current_app.config.get(
-                "ODDS_API_SPORT_KEY", "mma_mixed_martial_arts"
-            ),
-            regions=current_app.config.get("ODDS_API_REGIONS", "us"),
-            markets=current_app.config.get("ODDS_API_MARKETS", "h2h"),
-            timeout=current_app.config.get("ODDS_API_TIMEOUT_SECONDS", 10.0),
+        if request.method == "POST":
+            selected_ids = request.form.getlist("provider_event_id")
+            imported = import_selected_bouts(
+                database_path,
+                event_id,
+                provider,
+                selected_ids,
+            )
+            message = f"Imported {len(imported.fight_ids)} selected bout(s)."
+            if _quota_message(imported.quota):
+                message += f" {_quota_message(imported.quota)}."
+            flash(message, "success")
+            return redirect(url_for("web.event_detail", event_id=event_id))
+        bouts = provider.discover_events()
+        return render_template(
+            "provider_bouts.html",
+            event=event,
+            bouts=bouts,
+            quota=_quota_message(provider.last_quota),
         )
-        imported = import_upcoming_events(
-            current_app.config["DATABASE_PATH"], provider
-        )
-        flash(f"Imported {len(imported)} provider events.", "success")
-    except OddsProviderError as exc:
+    except (OddsProviderError, OddsImportError, ValidationError) as exc:
         flash(str(exc), "error")
-    return redirect(url_for("web.events"))
+        return redirect(url_for("web.event_detail", event_id=event_id))
+
+
+@web.post("/events/<int:event_id>/odds/refresh")
+def refresh_odds(event_id: int):
+    try:
+        provider = _odds_provider()
+        imported = refresh_odds_for_card(
+            current_app.config["DATABASE_PATH"],
+            event_id,
+            provider,
+        )
+        message = f"Imported {imported.snapshot_count} odds snapshot(s)."
+        if _quota_message(imported.quota):
+            message += f" {_quota_message(imported.quota)}."
+        flash(message, "success")
+    except (OddsProviderError, OddsImportError, ValidationError) as exc:
+        flash(str(exc), "error")
+    return redirect(url_for("web.event_detail", event_id=event_id))
 
 
 @web.get("/analytics")
