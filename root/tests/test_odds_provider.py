@@ -104,6 +104,17 @@ def make_card(app):
     )
 
 
+def make_empty_card(app, name="Provider Card"):
+    return save_event(
+        app.config["DATABASE_PATH"],
+        promotion="UFC",
+        name=name,
+        event_date="2026-08-15",
+        fights=[],
+        allow_empty=True,
+    )
+
+
 class FakeProvider:
     provider_name = "the_odds_api"
 
@@ -268,7 +279,7 @@ def test_refresh_and_edit_preserve_provider_identity_without_duplicate(tmp_path)
         event_date="2026-08-16",
         fights=[
             FightInput("Manual A", "Manual B", None, None, "early_prelim", 1, None, None, None, None, None, None, None),
-            FightInput("Fighter A", "Fighter B", "lightweight", "male", "main_card", 2, None, None, None, None, None, None, None),
+            FightInput("Fighter A", "Fighter B", "lightweight", "male", "main_card", 2, None, None, None, None, None, None, None, fight_id=old["id"]),
         ],
     )
     refresh_odds_for_card(app.config["DATABASE_PATH"], card_id, provider)
@@ -344,3 +355,215 @@ def test_web_discovery_is_explicit_and_surfaces_quota_without_live_request(tmp_p
     )
     assert imported.status_code == 302
     assert provider.odds_calls == [("bout-1",)]
+
+
+def test_empty_card_can_be_created_and_populated_entirely_through_provider_selection(tmp_path, monkeypatch):
+    app = create_app(AppConfig(database_path=tmp_path / "tracker.db"))
+    provider_events = [normalized_event("bout-1"), normalized_event("bout-2", "C", "D")]
+    provider = FakeProvider(
+        provider_events,
+        [
+            normalized_event("bout-1", update="2026-08-15T18:00:00Z"),
+            normalized_event("bout-2", "C", "D", "2026-08-15T18:01:00Z"),
+        ],
+    )
+    monkeypatch.setattr(web_routes, "TheOddsAPIProvider", lambda *args, **kwargs: provider)
+    client = app.test_client()
+
+    created = client.post(
+        "/events/new",
+        data={
+            "promotion": "UFC",
+            "name": "Empty Provider Card",
+            "event_date": "2026-08-15",
+            "fight_count": "15",
+        },
+    )
+    assert created.status_code == 302
+    with connect(app.config["DATABASE_PATH"]) as connection:
+        card = connection.execute("SELECT id, status FROM events WHERE name = 'Empty Provider Card'").fetchone()
+        assert tuple(card) == (1, "draft")
+        assert connection.execute("SELECT COUNT(*) FROM fights WHERE event_id = ?", (card["id"],)).fetchone()[0] == 0
+
+    settlement = client.post(f"/events/{card['id']}/settle", follow_redirects=True)
+    assert b"an event needs at least one fight before settlement" in settlement.data
+
+    assert client.get(f"/events/{card['id']}/provider-bouts").status_code == 200
+    imported = client.post(
+        f"/events/{card['id']}/provider-bouts",
+        data={"provider_event_id": ["bout-1", "bout-2"]},
+    )
+    assert imported.status_code == 302
+    with connect(app.config["DATABASE_PATH"]) as connection:
+        fights = connection.execute(
+            "SELECT external_id FROM fights WHERE event_id = ? ORDER BY bout_order",
+            (card["id"],),
+        ).fetchall()
+    assert [row[0] for row in fights] == ["bout-1", "bout-2"]
+
+
+def test_provider_import_respects_configured_capacity_before_paid_odds_request(tmp_path):
+    app = create_app(AppConfig(database_path=tmp_path / "tracker.db"))
+    card_id = make_empty_card(app, "Capacity Card")
+    discoveries = [normalized_event(f"bout-{index}", f"A{index}", f"B{index}") for index in range(1, 17)]
+    odds = [normalized_event(f"bout-{index}", f"A{index}", f"B{index}", f"2026-08-15T18:{index:02d}:00Z") for index in range(1, 17)]
+    provider = FakeProvider(discoveries, odds)
+
+    import_selected_bouts(
+        app.config["DATABASE_PATH"],
+        card_id,
+        provider,
+        [f"bout-{index}" for index in range(1, 16)],
+    )
+    assert len(provider.odds_calls) == 1
+    with pytest.raises(OddsImportError, match="more than 15"):
+        import_selected_bouts(app.config["DATABASE_PATH"], card_id, provider, ["bout-16"])
+
+    assert len(provider.odds_calls) == 1
+    with connect(app.config["DATABASE_PATH"]) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM fights WHERE event_id = ?", (card_id,)).fetchone()[0] == 15
+
+
+def test_new_provider_fight_demotes_upcoming_card_but_reimport_does_not(tmp_path):
+    app = create_app(AppConfig(database_path=tmp_path / "tracker.db"))
+    card_id = make_empty_card(app, "Lifecycle Card")
+    provider_event = normalized_event("bout-1", update="2026-08-15T18:00:00Z")
+    provider = FakeProvider([provider_event], [provider_event])
+
+    import_selected_bouts(app.config["DATABASE_PATH"], card_id, provider, ["bout-1"])
+    with connect(app.config["DATABASE_PATH"]) as connection:
+        fight = connection.execute("SELECT id FROM fights WHERE external_id = 'bout-1'").fetchone()
+        analyst_id = connection.execute("SELECT id FROM analysts WHERE slug = 'theweasle'").fetchone()[0]
+        snapshot_id = connection.execute("SELECT id FROM odds_snapshots WHERE fight_id = ? AND fighter = 'Fighter A'", (fight[0],)).fetchone()[0]
+    save_event(
+        app.config["DATABASE_PATH"],
+        event_id=card_id,
+        promotion="UFC",
+        name="Lifecycle Card",
+        event_date="2026-08-15",
+        fights=[FightInput("Fighter A", "Fighter B", None, None, None, 1, analyst_id, "Fighter A", 70, "decision", None, None, 50, snapshot_id, fight[0])],
+    )
+    with connect(app.config["DATABASE_PATH"]) as connection:
+        assert connection.execute("SELECT status FROM events WHERE id = ?", (card_id,)).fetchone()[0] == "upcoming"
+
+    import_selected_bouts(app.config["DATABASE_PATH"], card_id, provider, ["bout-1"])
+    with connect(app.config["DATABASE_PATH"]) as connection:
+        assert connection.execute("SELECT status FROM events WHERE id = ?", (card_id,)).fetchone()[0] == "upcoming"
+
+
+def test_provider_identity_and_snapshots_follow_stable_ids_when_bout_orders_swap(tmp_path):
+    app = create_app(AppConfig(database_path=tmp_path / "tracker.db"))
+    card_id = make_empty_card(app, "Reorder Card")
+    provider_events = [normalized_event("bout-1"), normalized_event("bout-2", "C", "D")]
+    provider = FakeProvider(
+        provider_events,
+        [normalized_event("bout-1", update="2026-08-15T18:00:00Z"), normalized_event("bout-2", "C", "D", "2026-08-15T18:01:00Z")],
+    )
+    import_selected_bouts(app.config["DATABASE_PATH"], card_id, provider, ["bout-1", "bout-2"])
+    with connect(app.config["DATABASE_PATH"]) as connection:
+        fights = connection.execute("SELECT id, external_id, fighter_a, fighter_b, bout_order FROM fights WHERE event_id = ? ORDER BY external_id", (card_id,)).fetchall()
+        original_snapshot = connection.execute("SELECT fight_id, fighter, sportsbook, moneyline, captured_at FROM odds_snapshots WHERE fight_id = ? AND fighter = ?", (fights[0]["id"], fights[0]["fighter_a"])).fetchone()
+
+    client = app.test_client()
+    response = client.post(
+        f"/events/{card_id}/edit",
+        data={
+            "fight_count": "15",
+            "promotion": "UFC",
+            "name": "Reorder Card",
+            "event_date": "2026-08-15",
+            "fight_id_1": str(fights[1]["id"]),
+            "bout_order_1": "1",
+            "fighter_a_1": fights[1]["fighter_a"],
+            "fighter_b_1": fights[1]["fighter_b"],
+            "fight_id_2": str(fights[0]["id"]),
+            "bout_order_2": "2",
+            "fighter_a_2": fights[0]["fighter_a"],
+            "fighter_b_2": fights[0]["fighter_b"],
+        },
+    )
+    assert response.status_code == 302
+    refresh_odds_for_card(app.config["DATABASE_PATH"], card_id, provider)
+    with connect(app.config["DATABASE_PATH"]) as connection:
+        refreshed = connection.execute("SELECT external_id, fighter_a, fighter_b, bout_order FROM fights WHERE event_id = ? ORDER BY bout_order", (card_id,)).fetchall()
+        current_snapshot = connection.execute("SELECT fighter, sportsbook, moneyline, captured_at FROM odds_snapshots WHERE fight_id = (SELECT id FROM fights WHERE external_id = 'bout-1') AND fighter = 'Fighter A' ORDER BY captured_at DESC, id DESC LIMIT 1").fetchone()
+    assert [(row[0], row[1], row[2]) for row in refreshed] == [("bout-2", "C", "D"), ("bout-1", "Fighter A", "Fighter B")]
+    assert tuple(current_snapshot) == tuple(original_snapshot[1:])
+    assert len(refreshed) == 2
+
+
+def test_selected_provider_snapshot_stays_selected_and_provenance_survives_unrelated_edit(tmp_path):
+    app = create_app(AppConfig(database_path=tmp_path / "tracker.db"))
+    card_id = make_empty_card(app, "Snapshot Form Card")
+    provider_event = normalized_event("bout-1", update="2026-08-15T18:00:00Z")
+    provider = FakeProvider([provider_event], [provider_event])
+    import_selected_bouts(app.config["DATABASE_PATH"], card_id, provider, ["bout-1"])
+    with connect(app.config["DATABASE_PATH"]) as connection:
+        fight = connection.execute("SELECT * FROM fights WHERE external_id = 'bout-1'").fetchone()
+        analyst_id = connection.execute("SELECT id FROM analysts WHERE slug = 'theweasle'").fetchone()[0]
+        snapshot = connection.execute("SELECT * FROM odds_snapshots WHERE fight_id = ? AND fighter = 'Fighter A'", (fight["id"],)).fetchone()
+    save_event(
+        app.config["DATABASE_PATH"],
+        event_id=card_id,
+        promotion="UFC",
+        name="Snapshot Form Card",
+        event_date="2026-08-15",
+        fights=[FightInput("Fighter A", "Fighter B", None, None, None, 1, analyst_id, "Fighter A", 70, "decision", None, None, 50, snapshot["id"], fight["id"])],
+    )
+    with connect(app.config["DATABASE_PATH"]) as connection:
+        current_fight = connection.execute("SELECT * FROM fights WHERE external_id = 'bout-1'").fetchone()
+        current_snapshot = connection.execute("SELECT * FROM odds_snapshots WHERE fight_id = ? AND fighter = 'Fighter A'", (current_fight["id"],)).fetchone()
+    client = app.test_client()
+    edit_page = client.get(f"/events/{card_id}/edit")
+    selected_marker = f'<option value="{current_snapshot["id"]}" selected>'.encode()
+    assert selected_marker in edit_page.data
+
+    invalid = client.post(
+        f"/events/{card_id}/edit",
+        data={
+            "fight_count": "15",
+            "promotion": "UFC",
+            "name": "Snapshot Form Card",
+            "event_date": "2026-08-15",
+            "fight_id_1": str(current_fight["id"]),
+            "bout_order_1": "1",
+            "fighter_a_1": "Fighter A",
+            "fighter_b_1": "Fighter B",
+            "analyst_1": "theweasle",
+            "picked_fighter_1": "fighter_a",
+            "confidence_1": "101",
+            "odds_snapshot_1": str(current_snapshot["id"]),
+            "stake_1": "0.50",
+        },
+    )
+    assert invalid.status_code == 200
+    assert selected_marker in invalid.data
+
+    saved = client.post(
+        f"/events/{card_id}/edit",
+        data={
+            "fight_count": "15",
+            "promotion": "UFC",
+            "name": "Snapshot Form Card Updated",
+            "event_date": "2026-08-15",
+            "fight_id_1": str(current_fight["id"]),
+            "bout_order_1": "1",
+            "fighter_a_1": "Fighter A",
+            "fighter_b_1": "Fighter B",
+            "analyst_1": "theweasle",
+            "picked_fighter_1": "fighter_a",
+            "confidence_1": "70",
+            "predicted_method_1": "decision",
+            "odds_snapshot_1": str(current_snapshot["id"]),
+            "stake_1": "0.50",
+        },
+    )
+    assert saved.status_code == 302
+    with connect(app.config["DATABASE_PATH"]) as connection:
+        wager = connection.execute(
+            """
+            SELECT os.external_provider, os.fighter, os.sportsbook, os.moneyline, os.captured_at
+            FROM wagers w JOIN odds_snapshots os ON os.id = w.odds_snapshot_id
+            """
+        ).fetchone()
+    assert tuple(wager) == ("the_odds_api", "Fighter A", "Book One", 125, "2026-08-15T18:00:00Z")

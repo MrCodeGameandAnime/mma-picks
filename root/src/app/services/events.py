@@ -28,6 +28,7 @@ class FightInput:
     moneyline: int | None
     stake_cents: int | None
     odds_snapshot_id: int | None = None
+    fight_id: int | None = None
 
 
 def _text(value: str | None) -> str:
@@ -64,7 +65,12 @@ def _parse_stake_cents(value: str | None) -> int:
     return cents
 
 
-def parse_fights(form: Mapping[str, str], database_path: str | Path) -> list[FightInput]:
+def parse_fights(
+    form: Mapping[str, str],
+    database_path: str | Path,
+    *,
+    allow_empty: bool = False,
+) -> list[FightInput]:
     with connect(database_path) as connection:
         analyst_ids = {
             row["slug"]: row["id"]
@@ -159,12 +165,13 @@ def parse_fights(form: Mapping[str, str], database_path: str | Path) -> list[Fig
                 moneyline=moneyline,
                 stake_cents=stake_cents,
                 odds_snapshot_id=snapshot_id,
+                fight_id=_optional_int(form.get(f"fight_id_{index}"), "fight id"),
             )
         )
 
     if len(fights) > max_card_fights:
         raise ValidationError(f"a card cannot contain more than {max_card_fights} fights")
-    if not fights:
+    if not fights and not allow_empty:
         raise ValidationError("add at least one fight to the card")
     bout_orders = [fight.bout_order for fight in fights]
     if any(order <= 0 for order in bout_orders):
@@ -203,6 +210,7 @@ def save_event(
     event_date: str,
     fights: list[FightInput],
     event_id: int | None = None,
+    allow_empty: bool = False,
 ) -> int:
     promotion = _text(promotion) or "UFC"
     name = _text(name)
@@ -210,7 +218,15 @@ def save_event(
     if not name or not event_date:
         raise ValidationError("event name and date are required")
 
-    finalized = all(
+    if not fights and not (event_id is None and allow_empty):
+        raise ValidationError("add at least one fight to the card")
+    supplied_fight_ids = [fight.fight_id for fight in fights if fight.fight_id is not None]
+    if len(supplied_fight_ids) != len(set(supplied_fight_ids)):
+        raise ValidationError("a fight ID cannot be reused in one submission")
+    if event_id is None and supplied_fight_ids:
+        raise ValidationError("existing fight IDs are only valid when editing a card")
+
+    finalized = bool(fights) and all(
         fight.analyst_id is not None
         and fight.picked_fighter is not None
         and fight.confidence is not None
@@ -234,11 +250,11 @@ def save_event(
                     "SELECT * FROM fights WHERE event_id = ? ORDER BY bout_order, id",
                     (event_id,),
                 ).fetchall()
-                old_fights = {int(row["bout_order"]): dict(row) for row in existing_fights}
+                old_fights = {int(row["id"]): dict(row) for row in existing_fights}
                 snapshot_rows = connection.execute(
                     """
                     SELECT os.id, os.fight_id, os.fighter, os.sportsbook, os.moneyline,
-                           os.captured_at, os.external_provider, f.bout_order
+                           os.captured_at, os.external_provider
                     FROM odds_snapshots os
                     JOIN fights f ON f.id = os.fight_id
                     WHERE f.event_id = ?
@@ -247,7 +263,7 @@ def save_event(
                     (event_id,),
                 ).fetchall()
                 for row in snapshot_rows:
-                    preserved_snapshots.setdefault(row["bout_order"], []).append(dict(row))
+                    preserved_snapshots.setdefault(int(row["fight_id"]), []).append(dict(row))
                 event = connection.execute(
                     "SELECT status FROM events WHERE id = ?", (event_id,)
                 ).fetchone()
@@ -262,7 +278,14 @@ def save_event(
                 connection.execute("DELETE FROM fights WHERE event_id = ?", (event_id,))
 
             for fight in fights:
-                old = old_fights.get(fight.bout_order, {})
+                if fight.fight_id is not None:
+                    if event_id is None:
+                        raise ValidationError("existing fight IDs are only valid when editing a card")
+                    old = old_fights.get(fight.fight_id)
+                    if old is None:
+                        raise ValidationError("fight does not belong to this card")
+                else:
+                    old = {}
                 cursor = connection.execute(
                     """
                     INSERT INTO fights(
@@ -286,7 +309,7 @@ def save_event(
                 )
                 fight_id = int(cursor.lastrowid)
                 snapshot_id_map: dict[int, int] = {}
-                for snapshot in preserved_snapshots.get(fight.bout_order, []):
+                for snapshot in preserved_snapshots.get(fight.fight_id or -1, []):
                     if snapshot["fighter"] not in {fight.fighter_a, fight.fighter_b}:
                         continue
                     snapshot_cursor = connection.execute(

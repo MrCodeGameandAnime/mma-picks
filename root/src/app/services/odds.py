@@ -164,6 +164,59 @@ def _persist_selected_event(
     )
 
 
+def _validate_card_import(
+    connection,
+    card_id: int,
+    provider_name: str,
+    selected_ids: Sequence[str],
+) -> tuple[dict, set[str]]:
+    card = connection.execute(
+        "SELECT id, status FROM events WHERE id = ?",
+        (card_id,),
+    ).fetchone()
+    if card is None:
+        raise OddsImportError("card not found")
+    if card["status"] in {"completed", "canceled"}:
+        raise OddsImportError("completed or canceled cards cannot be imported into")
+
+    setting = connection.execute(
+        "SELECT value FROM settings WHERE key = 'max_card_fights'"
+    ).fetchone()
+    if setting is None:
+        raise OddsImportError("max card size is not configured")
+    max_card_fights = int(setting["value"])
+    fight_count = int(
+        connection.execute(
+            "SELECT COUNT(*) AS fight_count FROM fights WHERE event_id = ?",
+            (card_id,),
+        ).fetchone()["fight_count"]
+    )
+
+    placeholders = ", ".join("?" for _ in selected_ids)
+    attached = connection.execute(
+        f"""
+        SELECT external_id, event_id, status
+        FROM fights
+        WHERE external_provider = ? AND external_id IN ({placeholders})
+        """,
+        (provider_name, *selected_ids),
+    ).fetchall()
+    attached_here: set[str] = set()
+    for row in attached:
+        if int(row["event_id"]) != card_id:
+            raise OddsImportError("provider bout is already attached to another card")
+        if row["status"] in {"completed", "canceled", "no_contest", "draw"}:
+            raise OddsImportError("completed or canceled bouts cannot be refreshed")
+        attached_here.add(row["external_id"])
+
+    new_ids = set(selected_ids) - attached_here
+    if fight_count + len(new_ids) > max_card_fights:
+        raise OddsImportError(
+            f"card cannot contain more than {max_card_fights} fights"
+        )
+    return dict(card), new_ids
+
+
 def import_selected_bouts(
     database_path: str | Path,
     card_id: int,
@@ -176,6 +229,9 @@ def import_selected_bouts(
     selected = _selected_ids(provider_event_ids)
     if not selected:
         raise OddsImportError("select at least one provider bout")
+
+    with connect(database_path) as connection:
+        _validate_card_import(connection, card_id, provider_name, selected)
 
     discovered = provider.discover_events(selected)
     discovered_by_id = {event.provider_event_id: event for event in discovered}
@@ -191,14 +247,12 @@ def import_selected_bouts(
 
     with connect(database_path) as connection:
         with transaction(connection):
-            card = connection.execute(
-                "SELECT id, status FROM events WHERE id = ?",
-                (card_id,),
-            ).fetchone()
-            if card is None:
-                raise OddsImportError("card not found")
-            if card["status"] in {"completed", "canceled"}:
-                raise OddsImportError("completed or canceled cards cannot be imported into")
+            card, new_ids = _validate_card_import(
+                connection,
+                card_id,
+                provider_name,
+                selected,
+            )
             fight_ids: list[int] = []
             snapshot_ids: list[int] = []
             for provider_event in selected_events:
@@ -210,6 +264,11 @@ def import_selected_bouts(
                 )
                 fight_ids.append(fight_id)
                 snapshot_ids.extend(imported_snapshot_ids)
+            if new_ids and card["status"] == "upcoming":
+                connection.execute(
+                    "UPDATE events SET status = 'draft' WHERE id = ?",
+                    (card_id,),
+                )
     return ImportResult(
         event_id=card_id,
         fight_ids=tuple(fight_ids),

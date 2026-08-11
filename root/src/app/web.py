@@ -139,13 +139,18 @@ def _render_event_form(event: dict | None = None, *, edit: bool = False):
 def new_event():
     if request.method == "POST":
         try:
-            fights = parse_fights(request.form, current_app.config["DATABASE_PATH"])
+            fights = parse_fights(
+                request.form,
+                current_app.config["DATABASE_PATH"],
+                allow_empty=True,
+            )
             event_id = save_event(
                 current_app.config["DATABASE_PATH"],
                 promotion=request.form.get("promotion", "UFC"),
                 name=request.form.get("name", ""),
                 event_date=request.form.get("event_date", ""),
                 fights=fights,
+                allow_empty=True,
             )
             flash("Card saved.", "success")
             return redirect(url_for("web.event_detail", event_id=event_id))
