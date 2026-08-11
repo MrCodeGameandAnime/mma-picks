@@ -16,7 +16,15 @@ def dashboard_metrics(database_path: str | Path) -> dict:
             SELECT id, stake_cents, profit_cents, status, settled_at
             FROM wagers
             WHERE status IN ('won', 'lost', 'push')
-            ORDER BY settled_at, id
+            ORDER BY settled_at IS NULL, settled_at, id
+            """
+        ).fetchall()
+        predictions = connection.execute(
+            """
+            SELECT p.picked_fighter, f.status, f.winner
+            FROM predictions p
+            JOIN fights f ON f.id = p.fight_id
+            WHERE f.status IN ('completed', 'draw', 'no_contest')
             """
         ).fetchall()
         cards_tracked = connection.execute(
@@ -26,9 +34,15 @@ def dashboard_metrics(database_path: str | Path) -> dict:
     total_wagered = sum(row["stake_cents"] for row in wagers)
     gross_winnings = sum(max(row["profit_cents"] or 0, 0) for row in wagers)
     net_profit = sum(row["profit_cents"] or 0 for row in wagers)
-    wins = sum(row["status"] == "won" for row in wagers)
-    losses = sum(row["status"] == "lost" for row in wagers)
-    pushes = sum(row["status"] == "push" for row in wagers)
+    wins = sum(
+        row["status"] == "completed" and row["picked_fighter"] == row["winner"]
+        for row in predictions
+    )
+    losses = sum(
+        row["status"] == "completed" and row["picked_fighter"] != row["winner"]
+        for row in predictions
+    )
+    pushes = sum(row["status"] in {"draw", "no_contest"} for row in predictions)
 
     bankroll = settings["starting_bankroll_cents"]
     peak = bankroll

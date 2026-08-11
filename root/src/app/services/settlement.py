@@ -81,6 +81,7 @@ def settle_event(
                 """,
                 (event_id,),
             ).fetchall()
+            current_wagers_by_id = {wager["id"]: wager for wager in current_wagers}
             fights_match = all(
                 fight["status"] == desired_fights[fight["id"]][0]
                 and fight["winner"] == desired_fights[fight["id"]][1]
@@ -100,18 +101,32 @@ def settle_event(
 
             settled_at = utc_now()
             for fight_id, (status, winner) in desired_fights.items():
-                connection.execute(
-                    "UPDATE fights SET status = ?, winner = ? WHERE id = ?",
-                    (status, winner, fight_id),
-                )
+                fight = next(row for row in fights if row["id"] == fight_id)
+                if fight["status"] != status or fight["winner"] != winner:
+                    connection.execute(
+                        "UPDATE fights SET status = ?, winner = ? WHERE id = ?",
+                        (status, winner, fight_id),
+                    )
             for wager_id, (wager_status, profit_cents) in desired_wagers.items():
+                wager = current_wagers_by_id[wager_id]
+                if (
+                    wager["status"] == wager_status
+                    and wager["profit_cents"] == profit_cents
+                    and wager["settled_at"] is not None
+                ):
+                    continue
+                wager_settled_at = (
+                    settled_at
+                    if wager["status"] == "pending"
+                    else wager["settled_at"] or settled_at
+                )
                 connection.execute(
                     """
                     UPDATE wagers
                     SET status = ?, profit_cents = ?, settled_at = ?
                     WHERE id = ?
                     """,
-                    (wager_status, profit_cents, settled_at, wager_id),
+                    (wager_status, profit_cents, wager_settled_at, wager_id),
                 )
 
             connection.execute(

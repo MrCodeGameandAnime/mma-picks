@@ -41,6 +41,15 @@ def fight_only_fields(index, fighter_a, fighter_b):
     }
 
 
+def prediction_only_fields(index, fighter_a, fighter_b, *, pick="fighter_a", confidence="60"):
+    fields = fight_only_fields(index, fighter_a, fighter_b)
+    fields.update({
+        f"picked_fighter_{index}": pick,
+        f"confidence_{index}": confidence,
+    })
+    return fields
+
+
 def card_form(name="Test Card"):
     return {
         "promotion": "UFC",
@@ -109,6 +118,103 @@ def test_prediction_without_wager_is_saved_as_a_draft(tmp_path):
         assert connection.execute("SELECT status FROM events WHERE id = ?", (event_id,)).fetchone()[0] == "draft"
         assert connection.execute("SELECT picked_fighter FROM predictions").fetchone()[0] == "Fighter B"
         assert connection.execute("SELECT COUNT(*) FROM wagers").fetchone()[0] == 0
+
+
+def test_prediction_without_wager_settled_as_win_affects_accuracy_not_bankroll(tmp_path):
+    app = make_app(tmp_path)
+    client = app.test_client()
+    form = card_form("Prediction Win")
+    form.update(prediction_only_fields(1, "Fighter A", "Fighter B"))
+    event_id = create_card(client, form)
+
+    with connect(app.config["DATABASE_PATH"]) as connection:
+        fight_id = connection.execute("SELECT id FROM fights WHERE event_id = ?", (event_id,)).fetchone()[0]
+    client.post(f"/events/{event_id}/settle", data={f"winner_{fight_id}": "Fighter A"})
+
+    metrics = dashboard_metrics(app.config["DATABASE_PATH"])
+    assert (metrics["wins"], metrics["losses"], metrics["pushes"]) == (1, 0, 0)
+    assert metrics["accuracy"] == 1.0
+    assert metrics["total_wagered_cents"] == 0
+    assert metrics["current_bankroll_cents"] == 750
+    dashboard = client.get("/").get_data(as_text=True)
+    analytics = client.get("/analytics").get_data(as_text=True)
+    assert "1-0-0" in dashboard and "100.0%" in dashboard
+    assert "1-0-0" in analytics and "100.0%" in analytics
+
+
+def test_prediction_without_wager_settled_as_loss_affects_accuracy_not_bankroll(tmp_path):
+    app = make_app(tmp_path)
+    client = app.test_client()
+    form = card_form("Prediction Loss")
+    form.update(prediction_only_fields(1, "Fighter A", "Fighter B"))
+    event_id = create_card(client, form)
+
+    with connect(app.config["DATABASE_PATH"]) as connection:
+        fight_id = connection.execute("SELECT id FROM fights WHERE event_id = ?", (event_id,)).fetchone()[0]
+    client.post(f"/events/{event_id}/settle", data={f"winner_{fight_id}": "Fighter B"})
+
+    metrics = dashboard_metrics(app.config["DATABASE_PATH"])
+    assert (metrics["wins"], metrics["losses"], metrics["pushes"]) == (0, 1, 0)
+    assert metrics["accuracy"] == 0.0
+    assert metrics["total_wagered_cents"] == 0
+    assert metrics["current_bankroll_cents"] == 750
+
+
+def test_prediction_without_wager_draw_and_no_contest_count_as_pushes(tmp_path):
+    app = make_app(tmp_path)
+    client = app.test_client()
+    form = card_form("Prediction Pushes")
+    form.update(prediction_only_fields(1, "Fighter A", "Fighter B"))
+    form.update(prediction_only_fields(2, "Fighter C", "Fighter D", pick="fighter_b"))
+    event_id = create_card(client, form)
+
+    with connect(app.config["DATABASE_PATH"]) as connection:
+        fight_ids = [row[0] for row in connection.execute("SELECT id FROM fights WHERE event_id = ? ORDER BY bout_order", (event_id,))]
+    client.post(
+        f"/events/{event_id}/settle",
+        data={f"winner_{fight_ids[0]}": "draw", f"winner_{fight_ids[1]}": "no_contest"},
+    )
+
+    metrics = dashboard_metrics(app.config["DATABASE_PATH"])
+    assert (metrics["wins"], metrics["losses"], metrics["pushes"]) == (0, 0, 2)
+    assert metrics["accuracy"] == 0.0
+    assert metrics["total_wagered_cents"] == 0
+
+
+def test_canceled_prediction_without_wager_is_excluded_from_prediction_metrics(tmp_path):
+    app = make_app(tmp_path)
+    client = app.test_client()
+    form = card_form("Canceled Prediction")
+    form.update(prediction_only_fields(1, "Fighter A", "Fighter B"))
+    event_id = create_card(client, form)
+
+    with connect(app.config["DATABASE_PATH"]) as connection:
+        fight_id = connection.execute("SELECT id FROM fights WHERE event_id = ?", (event_id,)).fetchone()[0]
+    client.post(f"/events/{event_id}/settle", data={f"winner_{fight_id}": "canceled"})
+
+    metrics = dashboard_metrics(app.config["DATABASE_PATH"])
+    assert (metrics["wins"], metrics["losses"], metrics["pushes"]) == (0, 0, 0)
+    assert metrics["accuracy"] == 0.0
+    assert metrics["current_bankroll_cents"] == 750
+
+
+def test_wagered_prediction_contributes_to_prediction_and_bankroll_metrics(tmp_path):
+    app = make_app(tmp_path)
+    client = app.test_client()
+    form = card_form("Wagered Prediction")
+    form.update(fight_fields(1, "Fighter A", "Fighter B"))
+    event_id = create_card(client, form)
+
+    with connect(app.config["DATABASE_PATH"]) as connection:
+        fight_id = connection.execute("SELECT id FROM fights WHERE event_id = ?", (event_id,)).fetchone()[0]
+    client.post(f"/events/{event_id}/settle", data={f"winner_{fight_id}": "Fighter A"})
+
+    metrics = dashboard_metrics(app.config["DATABASE_PATH"])
+    assert (metrics["wins"], metrics["losses"], metrics["pushes"]) == (1, 0, 0)
+    assert metrics["accuracy"] == 1.0
+    assert metrics["total_wagered_cents"] == 50
+    assert metrics["net_profit_cents"] == 36
+    assert metrics["current_bankroll_cents"] == 786
 
 
 def test_fully_populated_card_is_upcoming(tmp_path):
@@ -212,6 +318,53 @@ def test_edit_and_settle_card_is_identical_noop_then_corrects_atomically(tmp_pat
     assert metrics["current_bankroll_cents"] == 700
     assert metrics["wins"] == 0
     assert metrics["losses"] == 1
+
+
+def test_partial_settlement_correction_preserves_wager_chronology(tmp_path):
+    app = make_app(tmp_path)
+    client = app.test_client()
+    form = card_form("Chronology Card")
+    form.update(fight_fields(1, "Fighter A", "Fighter B"))
+    form.update(fight_fields(2, "Fighter C", "Fighter D"))
+    event_id = create_card(client, form)
+
+    with connect(app.config["DATABASE_PATH"]) as connection:
+        fight_ids = [row[0] for row in connection.execute("SELECT id FROM fights WHERE event_id = ? ORDER BY bout_order", (event_id,))]
+    initial_results = {f"winner_{fight_ids[0]}": "Fighter A", f"winner_{fight_ids[1]}": "Fighter D"}
+    assert client.post(f"/events/{event_id}/settle", data=initial_results).status_code == 302
+
+    with connect(app.config["DATABASE_PATH"]) as connection:
+        before = [
+            tuple(row)
+            for row in connection.execute("SELECT id, status, profit_cents, settled_at FROM wagers ORDER BY id")
+        ]
+
+    corrected_results = {f"winner_{fight_ids[0]}": "Fighter B", f"winner_{fight_ids[1]}": "Fighter D"}
+    assert client.post(f"/events/{event_id}/settle", data=corrected_results).status_code == 302
+    with connect(app.config["DATABASE_PATH"]) as connection:
+        after_correction = [
+            tuple(row)
+            for row in connection.execute("SELECT id, status, profit_cents, settled_at FROM wagers ORDER BY id")
+        ]
+
+    assert after_correction[0][1:] == ("lost", -50, before[0][3])
+    assert after_correction[1] == before[1]
+    assert [row[3] for row in after_correction] == [row[3] for row in before]
+
+    assert client.post(f"/events/{event_id}/settle", data=corrected_results).status_code == 302
+    with connect(app.config["DATABASE_PATH"]) as connection:
+        after_noop = [
+            tuple(row)
+            for row in connection.execute("SELECT id, status, profit_cents, settled_at FROM wagers ORDER BY id")
+        ]
+    assert after_noop == after_correction
+
+    metrics = dashboard_metrics(app.config["DATABASE_PATH"])
+    assert metrics["wins"] == 0
+    assert metrics["losses"] == 2
+    assert metrics["total_wagered_cents"] == 100
+    assert metrics["net_profit_cents"] == -100
+    assert metrics["current_bankroll_cents"] == 650
 
 
 def test_canceled_fight_is_void_and_excluded_from_bankroll(tmp_path):
