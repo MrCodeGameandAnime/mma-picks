@@ -5,7 +5,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Mapping
 
-from ..db import connect, transaction
+from ..db import connect, transaction, utc_now
 
 
 class ValidationError(ValueError):
@@ -27,6 +27,7 @@ class FightInput:
     sportsbook: str | None
     moneyline: int | None
     stake_cents: int | None
+    odds_snapshot_id: int | None = None
 
 
 def _text(value: str | None) -> str:
@@ -43,6 +44,13 @@ def _parse_int(value: str | None, field_name: str) -> int:
         return int(_text(value))
     except (TypeError, ValueError) as exc:
         raise ValidationError(f"{field_name} must be a whole number") from exc
+
+
+def _optional_int(value: str | None, field_name: str) -> int | None:
+    value = _text(value)
+    if not value:
+        return None
+    return _parse_int(value, field_name)
 
 
 def _parse_stake_cents(value: str | None) -> int:
@@ -153,6 +161,9 @@ def parse_fights(form: Mapping[str, str], database_path: str | Path) -> list[Fig
                 sportsbook=sportsbook,
                 moneyline=moneyline,
                 stake_cents=stake_cents,
+                odds_snapshot_id=_optional_int(
+                    form.get(f"odds_snapshot_{index}"), "odds snapshot"
+                ),
             )
         )
 
@@ -206,6 +217,7 @@ def save_event(
 
     with connect(database_path) as connection:
         with transaction(connection):
+            preserved_snapshots: dict[int, list[dict]] = {}
             if event_id is None:
                 cursor = connection.execute(
                     "INSERT INTO events(promotion, name, event_date, status) VALUES (?, ?, ?, ?)",
@@ -213,6 +225,21 @@ def save_event(
                 )
                 event_id = cursor.lastrowid
             else:
+                snapshot_rows = connection.execute(
+                    """
+                    SELECT
+                        os.id, os.fighter, os.sportsbook, os.moneyline,
+                        os.captured_at, os.external_provider,
+                        f.bout_order, f.fighter_a, f.fighter_b
+                    FROM odds_snapshots os
+                    JOIN fights f ON f.id = os.fight_id
+                    WHERE f.event_id = ?
+                    ORDER BY os.id
+                    """,
+                    (event_id,),
+                ).fetchall()
+                for row in snapshot_rows:
+                    preserved_snapshots.setdefault(row["bout_order"], []).append(dict(row))
                 event = connection.execute(
                     "SELECT status FROM events WHERE id = ?", (event_id,)
                 ).fetchone()
@@ -245,6 +272,27 @@ def save_event(
                     ),
                 )
                 fight_id = cursor.lastrowid
+                snapshot_id_map: dict[int, int] = {}
+                for snapshot in preserved_snapshots.get(fight.bout_order, []):
+                    if snapshot["fighter"] not in {fight.fighter_a, fight.fighter_b}:
+                        continue
+                    snapshot_cursor = connection.execute(
+                        """
+                        INSERT INTO odds_snapshots(
+                            fight_id, fighter, sportsbook, moneyline,
+                            captured_at, external_provider
+                        ) VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            fight_id,
+                            snapshot["fighter"],
+                            snapshot["sportsbook"],
+                            snapshot["moneyline"],
+                            snapshot["captured_at"],
+                            snapshot["external_provider"],
+                        ),
+                    )
+                    snapshot_id_map[snapshot["id"]] = snapshot_cursor.lastrowid
                 if fight.analyst_id is None:
                     continue
                 cursor = connection.execute(
@@ -268,14 +316,45 @@ def save_event(
                     or fight.sportsbook is None
                 ):
                     continue
+                odds_snapshot_id = snapshot_id_map.get(fight.odds_snapshot_id)
+                if odds_snapshot_id is not None:
+                    snapshot = connection.execute(
+                        "SELECT fighter, sportsbook, moneyline FROM odds_snapshots WHERE id = ?",
+                        (odds_snapshot_id,),
+                    ).fetchone()
+                    if snapshot is None or tuple(snapshot) != (
+                        fight.picked_fighter,
+                        fight.sportsbook,
+                        fight.moneyline,
+                    ):
+                        odds_snapshot_id = None
+                if odds_snapshot_id is None:
+                    snapshot_cursor = connection.execute(
+                        """
+                        INSERT INTO odds_snapshots(
+                            fight_id, fighter, sportsbook, moneyline,
+                            captured_at, external_provider
+                        ) VALUES (?, ?, ?, ?, ?, 'manual')
+                        """,
+                        (
+                            fight_id,
+                            fight.picked_fighter,
+                            fight.sportsbook,
+                            fight.moneyline,
+                            utc_now(),
+                        ),
+                    )
+                    odds_snapshot_id = snapshot_cursor.lastrowid
                 connection.execute(
                     """
                     INSERT INTO wagers(
-                        prediction_id, stake_cents, moneyline, sportsbook, status
-                    ) VALUES (?, ?, ?, ?, 'pending')
+                        prediction_id, odds_snapshot_id, stake_cents,
+                        moneyline, sportsbook, status
+                    ) VALUES (?, ?, ?, ?, ?, 'pending')
                     """,
                     (
                         cursor.lastrowid,
+                        odds_snapshot_id,
                         fight.stake_cents,
                         fight.moneyline,
                         fight.sportsbook,
@@ -326,11 +405,33 @@ def get_event(database_path: str | Path, event_id: int) -> dict | None:
                 p.confidence,
                 p.predicted_method,
                 w.id AS wager_id,
+                w.odds_snapshot_id,
                 w.stake_cents,
                 w.moneyline,
                 w.sportsbook,
                 w.status AS wager_status,
                 w.profit_cents
+                ,(
+                    SELECT os.id
+                    FROM odds_snapshots os
+                    WHERE os.fight_id = f.id
+                    ORDER BY os.captured_at DESC, os.id DESC
+                    LIMIT 1
+                ) AS latest_odds_snapshot_id
+                ,(
+                    SELECT os.moneyline
+                    FROM odds_snapshots os
+                    WHERE os.fight_id = f.id
+                    ORDER BY os.captured_at DESC, os.id DESC
+                    LIMIT 1
+                ) AS latest_odds_moneyline
+                ,(
+                    SELECT os.sportsbook
+                    FROM odds_snapshots os
+                    WHERE os.fight_id = f.id
+                    ORDER BY os.captured_at DESC, os.id DESC
+                    LIMIT 1
+                ) AS latest_odds_sportsbook
             FROM fights f
             LEFT JOIN predictions p ON p.fight_id = f.id
             LEFT JOIN analysts a ON a.id = p.analyst_id
@@ -349,6 +450,12 @@ def get_event(database_path: str | Path, event_id: int) -> dict | None:
             fight["picked_side"] = "fighter_b"
         else:
             fight["picked_side"] = ""
+        if fight["odds_snapshot_id"] is None:
+            fight["odds_snapshot_id"] = fight["latest_odds_snapshot_id"]
+        if fight["moneyline"] is None:
+            fight["moneyline"] = fight["latest_odds_moneyline"]
+        if fight["sportsbook"] is None:
+            fight["sportsbook"] = fight["latest_odds_sportsbook"]
         if fight["stake_cents"] is not None:
             fight["stake"] = f"{fight['stake_cents'] / 100:.2f}"
     return result

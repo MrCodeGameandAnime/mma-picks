@@ -3,6 +3,7 @@ from __future__ import annotations
 from flask import Blueprint, current_app, flash, redirect, render_template, request, url_for
 
 from .metrics import dashboard_metrics
+from .providers.odds import OddsProviderError, TheOddsAPIProvider
 from .services.events import (
     ValidationError,
     get_analysts,
@@ -13,6 +14,7 @@ from .services.events import (
     save_event,
 )
 from .services.settlement import settle_event
+from .services.odds import import_upcoming_events
 
 
 web = Blueprint("web", __name__)
@@ -34,6 +36,27 @@ def events():
         "events.html",
         events=list_events(current_app.config["DATABASE_PATH"]),
     )
+
+
+@web.post("/events/import")
+def import_events():
+    try:
+        provider = TheOddsAPIProvider(
+            current_app.config.get("ODDS_API_KEY"),
+            sport_key=current_app.config.get(
+                "ODDS_API_SPORT_KEY", "mma_mixed_martial_arts"
+            ),
+            regions=current_app.config.get("ODDS_API_REGIONS", "us"),
+            markets=current_app.config.get("ODDS_API_MARKETS", "h2h"),
+            timeout=current_app.config.get("ODDS_API_TIMEOUT_SECONDS", 10.0),
+        )
+        imported = import_upcoming_events(
+            current_app.config["DATABASE_PATH"], provider
+        )
+        flash(f"Imported {len(imported)} provider events.", "success")
+    except OddsProviderError as exc:
+        flash(str(exc), "error")
+    return redirect(url_for("web.events"))
 
 
 @web.get("/analytics")

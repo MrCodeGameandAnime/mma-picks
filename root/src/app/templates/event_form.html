@@ -31,6 +31,7 @@
                 <td><input class="small-input" type="number" name="moneyline_{{ i }}" value="{{ value(row, 'moneyline', i) }}"></td>
                 <td><input name="sportsbook_{{ i }}" value="{{ value(row, 'sportsbook', i) }}"></td>
                 <td><input class="small-input" type="number" min="0.01" step="0.01" name="stake_{{ i }}" value="{{ value(row, 'stake', i) }}" placeholder="{{ default_stake }}"></td>
+                <input type="hidden" name="odds_snapshot_{{ i }}" value="{{ value(row, 'odds_snapshot_id', i) }}">
                 <input type="hidden" name="analyst_{{ i }}" value="{{ value(row, 'analyst_slug', i, 'theweasle') }}">
             </tr>{% endfor %}</tbody>
         </table></div>

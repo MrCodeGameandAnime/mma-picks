@@ -23,6 +23,11 @@ def create_app(config=None) -> Flask:
         static_folder=str(STATIC_DIR),
     )
     flask_app.config["DATABASE_PATH"] = str(config.database_path)
+    flask_app.config["ODDS_API_KEY"] = config.odds_api_key
+    flask_app.config["ODDS_API_SPORT_KEY"] = config.odds_api_sport_key
+    flask_app.config["ODDS_API_REGIONS"] = config.odds_api_regions
+    flask_app.config["ODDS_API_MARKETS"] = config.odds_api_markets
+    flask_app.config["ODDS_API_TIMEOUT_SECONDS"] = config.odds_api_timeout_seconds
     flask_app.secret_key = config.flask_secret_key
     flask_app.config["TEMPLATES_DIR"] = str(TEMPLATES_DIR)
     flask_app.config["STATIC_DIR"] = str(STATIC_DIR)
