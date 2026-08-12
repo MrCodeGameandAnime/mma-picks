@@ -75,6 +75,10 @@ Open <http://127.0.0.1:5000>.
 
 The application creates or updates the ignored local database at `root/data/tracker.db` using numbered migrations under `root/tools/migrations/`.
 
+## Continuous integration
+
+GitHub Actions runs the test suite and Python compilation checks on every branch push and on pull requests against any branch. A merge creates a push to the target branch, so the merged commit is checked as well.
+
 ## Provider workflow
 
 The Odds API exposes individual MMA bouts, not UFC cards. The tracker therefore keeps card ownership local:
