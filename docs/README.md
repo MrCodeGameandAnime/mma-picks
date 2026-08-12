@@ -2,7 +2,7 @@
 
 A small, single-user Flask application for tracking UFC cards, analyst picks, American moneyline wagers, bankroll performance, and historical odds provenance.
 
-The application is currently implementing Gate 4 (pandas analytics). Gates 1–3 are approved.
+The application is currently implementing Gate 5 (public API). Gates 1–4 are approved.
 
 ## Current capabilities
 
@@ -17,7 +17,7 @@ The application is currently implementing Gate 4 (pandas analytics). Gates 1–3
 - Settle MMA cards manually and idempotently.
 - Show dashboard, event, settlement, and initial metrics views.
 
-The `/api/v1` blueprint is scaffolded, but the complete public analyst-picks API is planned for Gate 5. Raw bookmaker snapshots are kept private to the tracker.
+The public `/api/v1` API exposes normalized picks, event metadata, analyst provenance, derived results, and statistics. Raw bookmaker snapshots, sportsbook names, recorded moneylines, stakes, and wagers remain private to the tracker.
 
 ## Repository layout
 
@@ -79,6 +79,30 @@ The application creates or updates the ignored local database at `root/data/trac
 
 GitHub Actions runs the test suite and Python compilation checks on every branch push and on pull requests against any branch. A merge creates a push to the target branch, so the merged commit is checked as well.
 
+## Public API
+
+The versioned API uses stable JSON envelopes:
+
+```json
+{"data": {}, "meta": {"version": "v1"}}
+```
+
+List responses add `limit`, `offset`, `count`, `total`, and `has_more`. Errors use an `error` object containing a stable `code` and `message`. List endpoints default to 50 records and accept a maximum `limit` of 200.
+
+Available endpoints:
+
+```text
+GET /api/v1/analysts
+GET /api/v1/analysts/{slug}
+GET /api/v1/events
+GET /api/v1/events/{event_id}
+GET /api/v1/events/{event_id}/picks
+GET /api/v1/analysts/{slug}/picks
+GET /api/v1/analysts/{slug}/stats
+```
+
+Pick and statistics filters include `event`, `date_from`, `date_to`, `gender`, `weight_class`, `card_section`, `confidence_min`, `confidence_max`, `favorite`, `underdog`, and `result`. Favorite/underdog and ROI calculations may use private stored odds internally, but those odds are never returned by the API.
+
 ## Provider workflow
 
 The Odds API exposes individual MMA bouts, not UFC cards. The tracker therefore keeps card ownership local:
@@ -127,8 +151,8 @@ The canonical execution contract is [MMA Picks Tracker Implementation Plan](MMA%
 - Gate 1: Foundation - complete
 - Gate 2: Manual tracker MVP - complete
 - Gate 3: The Odds API integration - approved
-- Gate 4: Analytics - in progress
-- Gate 5: Public API - planned
+- Gate 4: Analytics - approved
+- Gate 5: Public API - in progress
 - Gate 6: Automated analyst ingestion - planned
 - Gate 7: RapidAPI preparation - planned
 

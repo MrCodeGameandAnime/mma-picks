@@ -11,6 +11,7 @@ from ..db import connect
 
 @dataclass(frozen=True)
 class AnalyticsFilters:
+    event: str | None = None
     analyst: str | None = None
     gender: str | None = None
     weight_class: str | None = None
@@ -53,6 +54,7 @@ def filters_from_mapping(values: Mapping[str, object]) -> AnalyticsFilters:
         confidence_band = None
 
     return AnalyticsFilters(
+        event=str(values.get("event", "")).strip() or None,
         analyst=str(values.get("analyst", "")).strip() or None,
         gender=str(values.get("gender", "")).strip() or None,
         weight_class=str(values.get("weight_class", "")).strip() or None,
@@ -185,6 +187,13 @@ def apply_filters(frame: pd.DataFrame, filters: AnalyticsFilters) -> pd.DataFram
     for column, value in equality_filters.items():
         if value is not None and column in filtered:
             filtered = filtered[filtered[column].eq(value)]
+    if filters.event is not None:
+        if filters.event.isdigit():
+            filtered = filtered[filtered["event_id"].eq(int(filters.event))]
+        else:
+            filtered = filtered[
+                filtered["event_name"].str.contains(filters.event, case=False, regex=False, na=False)
+            ]
     if filters.confidence_min is not None:
         filtered = filtered[filtered["confidence"].ge(filters.confidence_min)]
     if filters.confidence_max is not None:

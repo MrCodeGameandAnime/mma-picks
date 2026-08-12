@@ -30,7 +30,10 @@ def test_api_v1_blueprint_is_registered(tmp_path):
     static_response = app.test_client().get("/static/style.css")
 
     assert response.status_code == 200
-    assert response.get_json() == {"status": "ok", "version": "v1"}
+    assert response.get_json() == {
+        "data": {"status": "ok"},
+        "meta": {"version": "v1"},
+    }
     assert static_response.status_code == 200
     assert "metric-grid" in static_response.get_data(as_text=True)
 
