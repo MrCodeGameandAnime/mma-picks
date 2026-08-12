@@ -1,15 +1,53 @@
 {% extends "base.html" %}
 {% block title %}Analytics - MMA Picks Tracker{% endblock %}
+{% set summary = report.summary %}
+{% macro pct(value) %}{{ '%.1f'|format(value * 100) }}%{% endmacro %}
+{% macro performance_table(title, rows, label='Group') %}
+<section class="panel">
+    <div class="section-heading"><h2>{{ title }}</h2><span class="muted">Every result includes sample size.</span></div>
+    {% if rows %}<div class="table-scroll"><table><thead><tr><th>{{ label }}</th><th>Sample</th><th>Record</th><th>Accuracy</th><th>Wager sample</th><th>ROI</th><th>Net P/L</th></tr></thead><tbody>
+    {% for row in rows %}<tr><td>{{ row.analyst_name if row.analyst_name is defined else row.group }}</td><td>{{ row.sample_size }}</td><td>{{ row.wins }}-{{ row.losses }}-{{ row.pushes }}</td><td>{{ pct(row.accuracy) }}</td><td>{{ row.wager_sample_size }}</td><td>{{ pct(row.roi) }}</td><td>{{ row.net_profit_cents|money }}</td></tr>{% endfor %}
+    </tbody></table></div>{% else %}<p class="muted">No settled predictions match these filters.</p>{% endif %}
+</section>
+{% endmacro %}
 {% block content %}
-<div class="page-heading"><div><p class="eyebrow">Gate 2 summary</p><h1>Analytics</h1></div></div>
+<div class="page-heading"><div><p class="eyebrow">Gate 4</p><h1>Analytics</h1><p class="muted">Pandas-backed performance summaries with explicit sample sizes.</p></div></div>
+<section class="panel">
+    <div class="section-heading"><h2>Filters</h2><a class="button secondary" href="{{ url_for('web.analytics') }}">Clear filters</a></div>
+    <form method="get" class="form-grid">
+        <label>Analyst<select name="analyst"><option value="">All analysts</option>{% for analyst in analysts %}<option value="{{ analyst.slug }}" {% if request.args.get('analyst') == analyst.slug %}selected{% endif %}>{{ analyst.name }}</option>{% endfor %}</select></label>
+        <label>Gender<select name="gender"><option value="">All genders</option><option value="male" {% if request.args.get('gender') == 'male' %}selected{% endif %}>Male</option><option value="female" {% if request.args.get('gender') == 'female' %}selected{% endif %}>Female</option></select></label>
+        <label>Weight class<input name="weight_class" value="{{ request.args.get('weight_class', '') }}" placeholder="e.g. WW"></label>
+        <label>Card section<select name="card_section"><option value="">All sections</option>{% for value in ['early_prelim', 'prelim', 'main_card'] %}<option value="{{ value }}" {% if request.args.get('card_section') == value %}selected{% endif %}>{{ value|replace('_', ' ')|title }}</option>{% endfor %}</select></label>
+        <label>Confidence band<select name="confidence_band"><option value="">All bands</option>{% for value in ['0-49', '50-74', '75-100'] %}<option value="{{ value }}" {% if request.args.get('confidence_band') == value %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
+        <label>Favorite / underdog<select name="favorite"><option value="">Both</option><option value="favorite" {% if request.args.get('favorite') == 'favorite' %}selected{% endif %}>Favorite</option><option value="underdog" {% if request.args.get('favorite') == 'underdog' %}selected{% endif %}>Underdog</option></select></label>
+        <label>Result<select name="result"><option value="">All results</option><option value="won" {% if request.args.get('result') in ['won', 'win'] %}selected{% endif %}>Won</option><option value="lost" {% if request.args.get('result') in ['lost', 'loss'] %}selected{% endif %}>Lost</option><option value="push" {% if request.args.get('result') == 'push' %}selected{% endif %}>Push</option><option value="pending" {% if request.args.get('result') == 'pending' %}selected{% endif %}>Pending</option></select></label>
+        <label>Confidence min<input type="number" min="0" max="100" name="confidence_min" value="{{ request.args.get('confidence_min', '') }}"></label>
+        <label>Confidence max<input type="number" min="0" max="100" name="confidence_max" value="{{ request.args.get('confidence_max', '') }}"></label>
+        <label>Odds min<input type="number" name="odds_min" value="{{ request.args.get('odds_min', '') }}" placeholder="American"></label>
+        <label>Odds max<input type="number" name="odds_max" value="{{ request.args.get('odds_max', '') }}" placeholder="American"></label>
+        <label>Date from<input type="date" name="date_from" value="{{ request.args.get('date_from', '') }}"></label>
+        <label>Date to<input type="date" name="date_to" value="{{ request.args.get('date_to', '') }}"></label>
+        <div class="form-actions"><button class="button" type="submit">Apply filters</button></div>
+    </form>
+</section>
 <section class="metric-grid">
-    <div class="metric-card"><span>Bankroll</span><strong>{{ metrics.current_bankroll_cents|money }}</strong></div>
-    <div class="metric-card"><span>Net profit</span><strong>{{ metrics.net_profit_cents|money }}</strong></div>
-    <div class="metric-card"><span>ROI</span><strong>{{ '%.1f'|format(metrics.roi * 100) }}%</strong></div>
-    <div class="metric-card"><span>Record</span><strong>{{ metrics.wins }}-{{ metrics.losses }}-{{ metrics.pushes }}</strong></div>
-    <div class="metric-card"><span>Accuracy</span><strong>{{ '%.1f'|format(metrics.accuracy * 100) }}%</strong></div>
-    <div class="metric-card"><span>Peak bankroll</span><strong>{{ metrics.peak_bankroll_cents|money }}</strong></div>
-    <div class="metric-card"><span>Max drawdown</span><strong>{{ metrics.maximum_drawdown_cents|money }}</strong></div>
-    <div class="metric-card"><span>Cards tracked</span><strong>{{ metrics.cards_tracked }}</strong></div>
+    <div class="metric primary"><span>Current bankroll</span><strong>{{ summary.current_bankroll_cents|money }}</strong></div>
+    <div class="metric"><span>Sample size</span><strong>{{ summary.sample_size }}</strong></div>
+    <div class="metric"><span>Wager sample</span><strong>{{ summary.wager_sample_size }}</strong></div>
+    <div class="metric"><span>Record</span><strong>{{ summary.wins }}-{{ summary.losses }}-{{ summary.pushes }}</strong></div>
+    <div class="metric"><span>Accuracy</span><strong>{{ pct(summary.accuracy) }}</strong></div>
+    <div class="metric"><span>ROI</span><strong>{{ pct(summary.roi) }}</strong></div>
+    <div class="metric"><span>Net P/L</span><strong>{{ summary.net_profit_cents|money }}</strong></div>
+    <div class="metric"><span>Maximum drawdown</span><strong>{{ summary.maximum_drawdown_cents|money }}</strong></div>
+</section>
+{{ performance_table('Performance by analyst', report.by_analyst, 'Analyst') }}
+{{ performance_table('Performance by confidence band', report.by_confidence_band, 'Confidence') }}
+{{ performance_table('Performance by gender', report.by_gender, 'Gender') }}
+{{ performance_table('Performance by weight class', report.by_weight_class, 'Weight class') }}
+{{ performance_table('Performance by card section', report.by_card_section, 'Card section') }}
+{{ performance_table('Performance by favorite / underdog', report.by_favorite_status, 'Line type') }}
+<section class="panel"><div class="section-heading"><h2>Bankroll history</h2><span class="muted">Settled non-void wagers in chronological order.</span></div>
+{% if report.bankroll_history %}<div class="table-scroll"><table><thead><tr><th>Settled</th><th>Event</th><th>Profit</th><th>Bankroll</th><th>Peak</th><th>Drawdown</th></tr></thead><tbody>{% for row in report.bankroll_history %}<tr><td>{{ row.settled_at }}</td><td>{{ row.event_name }}</td><td>{{ row.profit_cents|money }}</td><td>{{ row.bankroll_cents|money }}</td><td>{{ row.peak_bankroll_cents|money }}</td><td>{{ row.drawdown_cents|money }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<p class="muted">No settled wagers match these filters.</p>{% endif %}
 </section>
 {% endblock %}

@@ -2,7 +2,7 @@
 
 A small, single-user Flask application for tracking UFC cards, analyst picks, American moneyline wagers, bankroll performance, and historical odds provenance.
 
-The application is currently complete through Gate 3. Gate 4 (pandas analytics) has not started.
+The application is currently implementing Gate 4 (pandas analytics). Gates 1–3 are approved.
 
 ## Current capabilities
 
@@ -122,8 +122,8 @@ The canonical execution contract is [MMA Picks Tracker Implementation Plan](MMA%
 
 - Gate 1: Foundation - complete
 - Gate 2: Manual tracker MVP - complete
-- Gate 3: The Odds API integration - complete pending review/closure
-- Gate 4: Analytics - not started
+- Gate 3: The Odds API integration - approved
+- Gate 4: Analytics - in progress
 - Gate 5: Public API - planned
 - Gate 6: Automated analyst ingestion - planned
 - Gate 7: RapidAPI preparation - planned

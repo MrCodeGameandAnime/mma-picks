@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from flask import Blueprint, current_app, flash, redirect, render_template, request, url_for
 
+from .analytics import analytics_report, filters_from_mapping
 from .metrics import dashboard_metrics
 from .providers.odds import OddsProviderError, QuotaInfo, TheOddsAPIProvider
 from .services.events import (
@@ -111,9 +112,11 @@ def refresh_odds(event_id: int):
 
 @web.get("/analytics")
 def analytics():
+    filters = filters_from_mapping(request.args)
     return render_template(
         "analytics.html",
-        metrics=dashboard_metrics(current_app.config["DATABASE_PATH"]),
+        report=analytics_report(current_app.config["DATABASE_PATH"], filters),
+        analysts=get_analysts(current_app.config["DATABASE_PATH"]),
     )
 
 
