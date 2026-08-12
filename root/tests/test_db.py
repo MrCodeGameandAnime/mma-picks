@@ -36,7 +36,13 @@ def test_database_initialization_is_idempotent(tmp_path):
 
     with connect(database_path) as connection:
         assert connection.execute("SELECT COUNT(*) FROM analysts").fetchone()[0] == 1
-        assert connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 2
+        assert connection.execute(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 1"
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 2"
+        ).fetchone()[0] == 1
 
 
 def test_migrations_use_canonical_utc_timestamps(tmp_path):

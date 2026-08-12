@@ -2,7 +2,7 @@
 
 A small, single-user Flask application for tracking UFC cards, analyst picks, American moneyline wagers, bankroll performance, and historical odds provenance.
 
-The application is currently implementing Gate 5 (public API). Gates 1–4 are approved.
+The application is currently implementing Gate 6 (automated analyst ingestion). Gates 1–5 are approved.
 
 ## Current capabilities
 
@@ -119,6 +119,14 @@ Discovery uses the quota-free The Odds API events endpoint. Paid current odds ar
 
 Manual sportsbook and moneyline entry remains available when provider data is unavailable or when a manual line is intentionally used.
 
+## Automated analyst-source status
+
+Gate 6 now has an explicit picks-provider boundary and an atomic ingestion service. Imported predictions preserve a source URL, source identifier, publication timestamp, and capture timestamp. A failed or conflicting import cannot replace existing manual or previously imported predictions.
+
+The automated external adapter is intentionally not enabled yet. The official [TheWeasle YouTube channel](https://www.youtube.com/@TheWeasle) and [X profile](https://x.com/ThaWeasle) are candidate first-party surfaces, but the available public metadata does not provide a stable structured per-fight pick feed. The [YouTube Data API](https://developers.google.com/youtube/v3/docs/activities/list) can enumerate channel activity and video metadata; it does not by itself establish structured pick data. X access must use documented authenticated API access rather than page scraping.
+
+Until a stable, technically permitted structured source is available, `UnsupportedPicksProvider` fails closed and manual whole-card entry remains the canonical workflow. No undocumented scraping, transcript inference, third-party aggregator dependency, or live source request is part of the application.
+
 ## Tests and validation
 
 Run the complete offline test suite from the repository directory:
@@ -152,8 +160,8 @@ The canonical execution contract is [MMA Picks Tracker Implementation Plan](MMA%
 - Gate 2: Manual tracker MVP - complete
 - Gate 3: The Odds API integration - approved
 - Gate 4: Analytics - approved
-- Gate 5: Public API - in progress
-- Gate 6: Automated analyst ingestion - planned
+- Gate 5: Public API - approved
+- Gate 6: Automated analyst ingestion - in progress; external source adapter pending a stable structured source
 - Gate 7: RapidAPI preparation - planned
 
 `plan.md` is retained as historical planning material and is not the active execution contract.

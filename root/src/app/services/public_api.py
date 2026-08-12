@@ -198,6 +198,7 @@ def load_public_picks(
                 p.source_url,
                 p.source_published_at,
                 p.captured_at,
+                p.source_identifier,
                 a.slug AS analyst_slug,
                 a.name AS analyst_name,
                 a.source_type AS analyst_source_type,
@@ -407,6 +408,7 @@ def public_pick(row: Mapping[str, object]) -> dict:
             "source_url": row["source_url"],
             "source_published_at": row["source_published_at"],
             "captured_at": row["captured_at"],
+            "source_identifier": row["source_identifier"],
         },
     }
 

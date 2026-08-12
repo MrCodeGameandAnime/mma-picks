@@ -239,6 +239,7 @@ def save_event(
         with transaction(connection):
             old_fights: dict[int, dict] = {}
             preserved_snapshots: dict[int, list[dict]] = {}
+            preserved_predictions: dict[int, list[dict]] = {}
             if event_id is None:
                 cursor = connection.execute(
                     "INSERT INTO events(promotion, name, event_date, status) VALUES (?, ?, ?, ?)",
@@ -264,6 +265,19 @@ def save_event(
                 ).fetchall()
                 for row in snapshot_rows:
                     preserved_snapshots.setdefault(int(row["fight_id"]), []).append(dict(row))
+                prediction_rows = connection.execute(
+                    """
+                    SELECT p.fight_id, p.analyst_id, p.picked_fighter,
+                           p.source_url, p.source_published_at, p.captured_at,
+                           p.source_identifier
+                    FROM predictions p
+                    JOIN fights f ON f.id = p.fight_id
+                    WHERE f.event_id = ?
+                    """,
+                    (event_id,),
+                ).fetchall()
+                for row in prediction_rows:
+                    preserved_predictions.setdefault(int(row["fight_id"]), []).append(dict(row))
                 event = connection.execute(
                     "SELECT status FROM events WHERE id = ?", (event_id,)
                 ).fetchone()
@@ -332,12 +346,22 @@ def save_event(
 
                 if fight.analyst_id is None:
                     continue
+                source = next(
+                    (
+                        prediction
+                        for prediction in preserved_predictions.get(fight.fight_id or -1, [])
+                        if prediction["analyst_id"] == fight.analyst_id
+                        and prediction["picked_fighter"] == fight.picked_fighter
+                    ),
+                    None,
+                )
                 prediction_cursor = connection.execute(
                     """
                     INSERT INTO predictions(
                         fight_id, analyst_id, picked_fighter, confidence,
-                        predicted_method
-                    ) VALUES (?, ?, ?, ?, ?)
+                        predicted_method, source_url, source_published_at,
+                        captured_at, source_identifier
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         fight_id,
@@ -345,6 +369,10 @@ def save_event(
                         fight.picked_fighter,
                         fight.confidence,
                         fight.predicted_method,
+                        source["source_url"] if source else None,
+                        source["source_published_at"] if source else None,
+                        source["captured_at"] if source else utc_now(),
+                        source["source_identifier"] if source else None,
                     ),
                 )
                 if fight.stake_cents is None:
