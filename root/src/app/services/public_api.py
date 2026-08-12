@@ -94,6 +94,11 @@ def _optional_date(values: Mapping[str, object], name: str) -> str | None:
 
 
 def parse_pick_filters(values: Mapping[str, object]) -> PublicPickFilters:
+    date_from = _optional_date(values, "date_from")
+    date_to = _optional_date(values, "date_to")
+    if date_from is not None and date_to is not None and date_from > date_to:
+        raise PublicApiError("invalid_parameter", "date_from cannot exceed date_to")
+
     confidence_min = _optional_int(values, "confidence_min")
     confidence_max = _optional_int(values, "confidence_max")
     if confidence_min is not None and not 0 <= confidence_min <= 100:
@@ -132,8 +137,8 @@ def parse_pick_filters(values: Mapping[str, object]) -> PublicPickFilters:
 
     return PublicPickFilters(
         event=_query_value(values, "event"),
-        date_from=_optional_date(values, "date_from"),
-        date_to=_optional_date(values, "date_to"),
+        date_from=date_from,
+        date_to=date_to,
         gender=_query_value(values, "gender"),
         weight_class=_query_value(values, "weight_class"),
         card_section=_query_value(values, "card_section"),

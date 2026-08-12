@@ -88,7 +88,8 @@ def test_api_analyst_picks_support_filters_and_pagination(tmp_path):
     response = client.get(
         "/api/v1/analysts/theweasle/picks"
         "?gender=female&weight_class=SW&card_section=prelim"
-        "&confidence_min=50&confidence_max=70&underdog=true&limit=1"
+        "&confidence_min=50&confidence_max=70&underdog=true"
+        "&date_from=2026-08-01&date_to=2026-08-15&limit=1"
     )
 
     assert response.status_code == 200
@@ -140,4 +141,20 @@ def test_api_validation_and_not_found_errors_are_stable(tmp_path):
     assert missing_analyst.status_code == 404
     assert missing_analyst.get_json() == {
         "error": {"code": "analyst_not_found", "message": "analyst not found"}
+    }
+
+
+def test_api_rejects_inverted_date_ranges(tmp_path):
+    app = make_app(tmp_path)
+    response = app.test_client().get(
+        "/api/v1/analysts/theweasle/picks"
+        "?date_from=2026-09-01&date_to=2026-08-01"
+    )
+
+    assert response.status_code == 400
+    assert response.get_json() == {
+        "error": {
+            "code": "invalid_parameter",
+            "message": "date_from cannot exceed date_to",
+        }
     }
