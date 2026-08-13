@@ -226,6 +226,7 @@ def load_public_picks(
             LEFT JOIN wagers w ON w.prediction_id = p.id
             WHERE (? IS NULL OR a.slug = ?)
               AND (? IS NULL OR e.id = ?)
+              AND COALESCE(e.external_provider, '') != 'ufcstats'
             ORDER BY e.event_date DESC, e.id DESC, f.bout_order, f.id, p.id
             """,
             (analyst_slug, analyst_slug, event_id, event_id),
@@ -289,6 +290,7 @@ def list_public_events(
             LEFT JOIN fights f ON f.event_id = e.id
             WHERE (? IS NULL OR e.event_date >= ?)
               AND (? IS NULL OR e.event_date <= ?)
+              AND COALESCE(e.external_provider, '') != 'ufcstats'
             GROUP BY e.id
             ORDER BY e.event_date DESC, e.id DESC
             """,
@@ -307,7 +309,7 @@ def list_public_events(
 
 def get_public_event(database_path: str | Path, event_id: int) -> dict | None:
     with connect(database_path) as connection:
-        event = connection.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone()
+        event = connection.execute("SELECT * FROM events WHERE id = ? AND COALESCE(external_provider, '') != 'ufcstats'", (event_id,)).fetchone()
         if event is None:
             return None
         fights = connection.execute(

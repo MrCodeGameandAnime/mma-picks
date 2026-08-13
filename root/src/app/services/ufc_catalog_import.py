@@ -71,6 +71,24 @@ class ImportSummary:
 
 class _EventFailure(CatalogImportError):
     pass
+_COMMITTED_COUNTERS = ("events_inserted", "events_updated", "fights_inserted", "fights_updated", "stat_rows_inserted", "stat_rows_updated", "stat_rows_removed")
+
+
+def _merge_event_summary(target: ImportSummary, event_summary: ImportSummary) -> None:
+    for name in _COMMITTED_COUNTERS:
+        setattr(target, name, getattr(target, name) + getattr(event_summary, name))
+    target.unresolved_fighter_identities.update(event_summary.unresolved_fighter_identities)
+    target.unsupported_outcomes.update(event_summary.unsupported_outcomes)
+    target.errors.extend(event_summary.errors)
+
+
+def _record_event_failure(target: ImportSummary, event_summary: ImportSummary, event_name: str, error: str, fight_count: int) -> None:
+    target.events_failed += 1
+    target.fights_failed += fight_count
+    target.unresolved_fighter_identities.update(event_summary.unresolved_fighter_identities)
+    target.unsupported_outcomes.update(event_summary.unsupported_outcomes)
+    target.errors.extend(event_summary.errors)
+    target.errors.append(f"{event_name}: {error}")
 
 
 def _name_key(value: str) -> str:
@@ -476,27 +494,27 @@ def sync_catalog(
             fighter_ids = _upsert_fighters(connection, source, summary)
             del fighter_ids
         names = _fighter_name_index(connection)
+        issues_by_event: dict[str, list[str]] = defaultdict(list)
+        for issue in source.content_errors:
+            if issue.event_name:
+                issues_by_event[issue.event_name].append(issue.message)
+            else:
+                summary.errors.append(issue.message)
         for event in source.events:
             summary.events_processed += 1
             event_fights = fights_by_event.get(event.name, [])
+            event_summary = ImportSummary(summary.source_directory)
+            if issues_by_event.get(event.name):
+                _record_event_failure(summary, event_summary, event.name, "; ".join(issues_by_event[event.name]), len(event_fights))
+                continue
             try:
                 with transaction(connection):
-                    _sync_event(
-                        connection,
-                        event,
-                        event_fights,
-                        stats_by_event.get(event.name, {}),
-                        names,
-                        summary,
-                    )
+                    _sync_event(connection, event, event_fights, stats_by_event.get(event.name, {}), names, event_summary)
+                _merge_event_summary(summary, event_summary)
             except _EventFailure as exc:
-                summary.events_failed += 1
-                summary.fights_failed += len(event_fights)
-                summary.errors.append(f"{event.name}: {exc}")
+                _record_event_failure(summary, event_summary, event.name, str(exc), len(event_fights))
             except CatalogImportError as exc:
-                summary.events_failed += 1
-                summary.fights_failed += len(event_fights)
                 if str(exc).startswith("unsupported outcome:"):
-                    summary.unsupported_outcomes.add(str(exc).split(": ", 1)[1])
-                summary.errors.append(f"{event.name}: {exc}")
+                    event_summary.unsupported_outcomes.add(str(exc).split(": ", 1)[1])
+                _record_event_failure(summary, event_summary, event.name, str(exc), len(event_fights))
     return summary

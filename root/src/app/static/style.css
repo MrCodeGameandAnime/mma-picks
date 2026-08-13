@@ -60,4 +60,4 @@ label { color: #475467; display: flex; flex-direction: column; font-size: .85rem
 .tape-grid > div { border-bottom: 1px solid #e8ebef; padding: 8px 0; }
 .tape-grid h3 { margin: 0; }
 @media (max-width: 900px) { .fight-row { grid-template-columns: 35px minmax(240px, 1fr) 140px; } .fight-row > span:last-child { display: none; } .detail-grid { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 600px) { .catalog-card, .fight-row { align-items: flex-start; flex-direction: column; display: flex; } .tape-grid { grid-template-columns: 1fr 1fr; } .tape-grid > div:first-child { display: none; } .tape-grid h3 { grid-column: span 1; } .detail-grid { grid-template-columns: 1fr; } }
+@media (max-width: 600px) { .catalog-card, .fight-row { align-items: flex-start; flex-direction: column; display: flex; } .tape-grid { font-size: .9rem; gap: 8px; grid-template-columns: 105px minmax(0, 1fr) minmax(0, 1fr); } .tape-grid > div:first-child { display: block; } .tape-grid h3 { font-size: .95rem; } .detail-grid { grid-template-columns: 1fr; } }

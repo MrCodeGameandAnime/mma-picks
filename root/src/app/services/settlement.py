@@ -4,6 +4,7 @@ from pathlib import Path
 
 from ..db import connect, transaction, utc_now
 from ..payouts import calculate_profit_cents
+from .catalog_boundary import reject_catalog_event
 from .events import ValidationError
 
 
@@ -15,10 +16,12 @@ def settle_event(
     with connect(database_path) as connection:
         with transaction(connection):
             event = connection.execute(
-                "SELECT status FROM events WHERE id = ?", (event_id,)
+                "SELECT status, external_provider FROM events WHERE id = ?", (event_id,)
             ).fetchone()
-            if event is None:
-                raise ValidationError("event not found")
+            try:
+                reject_catalog_event(event)
+            except ValueError as exc:
+                raise ValidationError(str(exc)) from exc
             fights = connection.execute(
                 "SELECT id, fighter_a, fighter_b, status, winner FROM fights WHERE event_id = ? ORDER BY bout_order, id",
                 (event_id,),

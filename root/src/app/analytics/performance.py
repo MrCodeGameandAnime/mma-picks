@@ -142,6 +142,7 @@ def load_prediction_frame(database_path: str | Path) -> pd.DataFrame:
             JOIN events e ON e.id = f.event_id
             JOIN analysts a ON a.id = p.analyst_id
             LEFT JOIN wagers w ON w.prediction_id = p.id
+            WHERE COALESCE(e.external_provider, '') != 'ufcstats'
             ORDER BY e.event_date, f.bout_order, p.id
             """
         ).fetchall()

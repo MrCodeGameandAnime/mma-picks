@@ -20,6 +20,11 @@ _DATE_FORMATS = ("%B %d, %Y", "%b %d, %Y", "%Y-%m-%d")
 class UFCStatsSourceError(ValueError):
     pass
 
+@dataclass(frozen=True)
+class SourceContentError:
+    event_name: str | None
+    message: str
+
 
 @dataclass(frozen=True)
 class EventRecord:
@@ -102,6 +107,7 @@ class UFCStatsSource:
     fighters: tuple[FighterRecord, ...]
     fights: tuple[FightRecord, ...]
     round_stats: tuple[RoundStatRecord, ...]
+    content_errors: tuple[SourceContentError, ...] = ()
 
 
 def _text(value: str | None) -> str | None:
@@ -345,7 +351,8 @@ def _parse_fighters(source_dir: Path) -> tuple[FighterRecord, ...]:
     return tuple(records)
 
 
-def _parse_fights(source_dir: Path, events: tuple[EventRecord, ...]) -> tuple[FightRecord, ...]:
+def _parse_fights(source_dir: Path, events: tuple[EventRecord, ...], issues: list[SourceContentError] | None = None) -> tuple[FightRecord, ...]:
+    issues = issues if issues is not None else []
     detail_fields = ("EVENT", "BOUT", "URL")
     result_fields = (
         "EVENT", "BOUT", "OUTCOME", "WEIGHTCLASS", "METHOD", "ROUND",
@@ -368,14 +375,17 @@ def _parse_fights(source_dir: Path, events: tuple[EventRecord, ...]) -> tuple[Fi
     for line_number, row in enumerate(
         _load_csv(source_dir / "ufc_fight_results.csv", result_fields), 2
     ):
-        external_id, source_url = _parse_identity(
-            _required(row, "URL", line_number), "fight"
-        )
-        row = dict(row)
-        row["URL"] = source_url
-        if external_id not in results_by_id or row["EVENT"].strip() in event_names:
-            results_by_id[external_id] = row
-
+        event_name = _text(row.get("EVENT"))
+        try:
+            external_id, source_url = _parse_identity(
+                _required(row, "URL", line_number), "fight"
+            )
+            row = dict(row)
+            row["URL"] = source_url
+            if external_id not in results_by_id or event_name in event_names:
+                results_by_id[external_id] = row
+        except UFCStatsSourceError as exc:
+            issues.append(SourceContentError(event_name, f"fight result line {line_number}: {exc}"))
     event_orders: dict[str, dict[str, int]] = defaultdict(dict)
     for external_id, detail in details_by_id.items():
         event_name = _required(detail, "EVENT", 0)
@@ -383,9 +393,11 @@ def _parse_fights(source_dir: Path, events: tuple[EventRecord, ...]) -> tuple[Fi
 
     records: list[FightRecord] = []
     for external_id, detail in details_by_id.items():
+        event_name = _required(detail, "EVENT", 0)
         result = results_by_id.get(external_id)
         if result is None:
-            raise UFCStatsSourceError(f"missing result for fight {external_id}")
+            issues.append(SourceContentError(event_name, f"missing result for fight {external_id}"))
+            continue
         event_name = _required(detail, "EVENT", 0)
         bout = _required(detail, "BOUT", 0)
         match = _BOUT_RE.fullmatch(bout)
@@ -422,73 +434,33 @@ def _stat_pair(row: dict[str, str], field: str) -> tuple[int | None, int | None]
     return pair if pair is not None else (None, None)
 
 
-def _parse_stats(source_dir: Path) -> tuple[RoundStatRecord, ...]:
-    fields = (
-        "EVENT", "BOUT", "ROUND", "FIGHTER", "KD", "SIG.STR.", "SIG.STR. %",
-        "TOTAL STR.", "TD", "TD %", "SUB.ATT", "REV.", "CTRL", "HEAD",
-        "BODY", "LEG", "DISTANCE", "CLINCH", "GROUND",
-    )
+def _parse_stats(source_dir: Path, issues: list[SourceContentError] | None = None) -> tuple[RoundStatRecord, ...]:
+    issues = issues if issues is not None else []
+    fields = ("EVENT", "BOUT", "ROUND", "FIGHTER", "KD", "SIG.STR.", "SIG.STR. %", "TOTAL STR.", "TD", "TD %", "SUB.ATT", "REV.", "CTRL", "HEAD", "BODY", "LEG", "DISTANCE", "CLINCH", "GROUND")
     records: list[RoundStatRecord] = []
-    for line_number, row in enumerate(
-        _load_csv(source_dir / "ufc_fight_stats.csv", fields), 2
-    ):
-        if all(_missing(row.get(field)) for field in fields[2:]):
-            continue
-        event_name = _required(row, "EVENT", line_number)
-        bout = _required(row, "BOUT", line_number)
-        round_text = _required(row, "ROUND", line_number)
-        round_match = _ROUND_RE.fullmatch(round_text)
-        if round_match is None:
-            raise UFCStatsSourceError(f"line {line_number}: invalid round {round_text}")
-        fighter = _required(row, "FIGHTER", line_number)
-        sig_landed, sig_attempted = _stat_pair(row, "SIG.STR.")
-        total_landed, total_attempted = _stat_pair(row, "TOTAL STR.")
-        td_landed, td_attempted = _stat_pair(row, "TD")
-        head_landed, head_attempted = _stat_pair(row, "HEAD")
-        body_landed, body_attempted = _stat_pair(row, "BODY")
-        leg_landed, leg_attempted = _stat_pair(row, "LEG")
-        distance_landed, distance_attempted = _stat_pair(row, "DISTANCE")
-        clinch_landed, clinch_attempted = _stat_pair(row, "CLINCH")
-        ground_landed, ground_attempted = _stat_pair(row, "GROUND")
-        records.append(
-            RoundStatRecord(
-                event_name=event_name,
-                bout=bout,
-                round_number=int(round_match.group(1)),
-                fighter=fighter,
-                knockdowns=_parse_number(row.get("KD")),
-                sig_strikes_landed=sig_landed,
-                sig_strikes_attempted=sig_attempted,
-                sig_strike_pct=parse_percentage(row.get("SIG.STR. %")),
-                total_strikes_landed=total_landed,
-                total_strikes_attempted=total_attempted,
-                takedowns_landed=td_landed,
-                takedowns_attempted=td_attempted,
-                takedown_pct=parse_percentage(row.get("TD %")),
-                submission_attempts=_parse_number(row.get("SUB.ATT")),
-                reversals=_parse_number(row.get("REV.")),
-                control_seconds=parse_control_time(row.get("CTRL")),
-                head_landed=head_landed,
-                head_attempted=head_attempted,
-                body_landed=body_landed,
-                body_attempted=body_attempted,
-                leg_landed=leg_landed,
-                leg_attempted=leg_attempted,
-                distance_landed=distance_landed,
-                distance_attempted=distance_attempted,
-                clinch_landed=clinch_landed,
-                clinch_attempted=clinch_attempted,
-                ground_landed=ground_landed,
-                ground_attempted=ground_attempted,
-            )
-        )
+    for line_number, row in enumerate(_load_csv(source_dir / "ufc_fight_stats.csv", fields), 2):
+        event_name = _text(row.get("EVENT"))
+        try:
+            if all(_missing(row.get(field)) for field in fields[2:]):
+                continue
+            event_name = _required(row, "EVENT", line_number)
+            bout = _required(row, "BOUT", line_number)
+            round_text = _required(row, "ROUND", line_number)
+            match = _ROUND_RE.fullmatch(round_text)
+            if match is None:
+                raise UFCStatsSourceError(f"line {line_number}: invalid round {round_text}")
+            fighter = _required(row, "FIGHTER", line_number)
+            pairs = {field: _stat_pair(row, field) for field in ("SIG.STR.", "TOTAL STR.", "TD", "HEAD", "BODY", "LEG", "DISTANCE", "CLINCH", "GROUND")}
+            records.append(RoundStatRecord(event_name, bout, int(match.group(1)), fighter, _parse_number(row.get("KD")), *pairs["SIG.STR."], parse_percentage(row.get("SIG.STR. %")), *pairs["TOTAL STR."], *pairs["TD"], parse_percentage(row.get("TD %")), _parse_number(row.get("SUB.ATT")), _parse_number(row.get("REV.")), parse_control_time(row.get("CTRL")), *pairs["HEAD"], *pairs["BODY"], *pairs["LEG"], *pairs["DISTANCE"], *pairs["CLINCH"], *pairs["GROUND"]))
+        except UFCStatsSourceError as exc:
+            issues.append(SourceContentError(event_name, f"stat line {line_number}: {exc}"))
     return tuple(records)
-
 
 def load_source(source_dir: str | Path) -> UFCStatsSource:
     source_dir = Path(source_dir)
+    issues: list[SourceContentError] = []
     events = _parse_events(source_dir)
     fighters = _parse_fighters(source_dir)
-    fights = _parse_fights(source_dir, events)
-    round_stats = _parse_stats(source_dir)
-    return UFCStatsSource(events, fighters, fights, round_stats)
+    fights = _parse_fights(source_dir, events, issues)
+    round_stats = _parse_stats(source_dir, issues)
+    return UFCStatsSource(events, fighters, fights, round_stats, tuple(issues))

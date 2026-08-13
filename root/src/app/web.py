@@ -5,6 +5,7 @@ from flask import Blueprint, current_app, flash, redirect, render_template, requ
 from .analytics import analytics_report, filters_from_mapping
 from .metrics import dashboard_metrics
 from .providers.odds import OddsProviderError, QuotaInfo, TheOddsAPIProvider
+from .services.catalog_boundary import is_catalog_event
 from .services.events import (
     ValidationError,
     get_analysts,
@@ -62,6 +63,8 @@ def provider_bouts(event_id: int):
     event = get_event(database_path, event_id)
     if event is None:
         return "Event not found", 404
+    if is_catalog_event(event):
+        return redirect(url_for("catalog.card_detail", event_id=event_id))
     if event["status"] in {"completed", "canceled"}:
         flash("Completed or canceled cards cannot import provider bouts.", "error")
         return redirect(url_for("web.event_detail", event_id=event_id))
@@ -94,6 +97,12 @@ def provider_bouts(event_id: int):
 
 @web.post("/events/<int:event_id>/odds/refresh")
 def refresh_odds(event_id: int):
+    database_path = current_app.config["DATABASE_PATH"]
+    event = get_event(database_path, event_id)
+    if event is None:
+        return "Event not found", 404
+    if is_catalog_event(event):
+        return redirect(url_for("catalog.card_detail", event_id=event_id))
     try:
         provider = _odds_provider()
         imported = refresh_odds_for_card(
@@ -168,6 +177,8 @@ def edit_event(event_id: int):
     event = get_event(database_path, event_id)
     if event is None:
         return "Event not found", 404
+    if is_catalog_event(event):
+        return redirect(url_for("catalog.card_detail", event_id=event_id))
     if request.method == "POST":
         try:
             fights = parse_fights(request.form, database_path)
@@ -191,18 +202,26 @@ def event_detail(event_id: int):
     event = get_event(current_app.config["DATABASE_PATH"], event_id)
     if event is None:
         return "Event not found", 404
+    if is_catalog_event(event):
+        return redirect(url_for("catalog.card_detail", event_id=event_id))
     return render_template("event_detail.html", event=event)
 
 
 @web.post("/events/<int:event_id>/settle")
 def settle(event_id: int):
+    database_path = current_app.config["DATABASE_PATH"]
+    event = get_event(database_path, event_id)
+    if event is None:
+        return "Event not found", 404
+    if is_catalog_event(event):
+        return redirect(url_for("catalog.card_detail", event_id=event_id))
     try:
         results = {
             int(key.removeprefix("winner_")): value
             for key, value in request.form.items()
             if key.startswith("winner_")
         }
-        settle_event(current_app.config["DATABASE_PATH"], event_id, results)
+        settle_event(database_path, event_id, results)
         flash("Card settled.", "success")
     except (ValidationError, ValueError) as exc:
         flash(str(exc), "error")
