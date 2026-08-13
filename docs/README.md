@@ -170,6 +170,37 @@ All external provider calls are mocked in tests. Tests must not use the live API
 
 Money is stored as integer cents. Timestamps are persisted as UTC ISO-8601 values. The initial seeded analyst is TheWeasle, but the data model supports additional analysts.
 
+## Historical UFC catalog
+
+The read-only historical catalog imports generated CSV artifacts from the sibling `Greco1899/scrape_ufc_stats` repository. The repositories remain independent: MMAPicks does not vendor or import scraper code, and the Flask application reads only its own database after an explicit sync.
+
+Expected local layout:
+
+```text
+Cage Pick/
+|-- MMAPicks/
+`-- scrape_ufc_stats/
+```
+
+Run the importer from `MMAPicks/root`:
+
+```powershell
+python tools/sync_ufc_stats.py --source "..\..\scrape_ufc_stats"
+```
+
+The sync consumes `ufc_event_details.csv`, `ufc_fight_details.csv`, `ufc_fight_results.csv`, `ufc_fight_stats.csv`, `ufc_fighter_details.csv`, and `ufc_fighter_tott.csv`. UFCStats URL IDs are the canonical external identities. The importer is transactional per event, updates existing canonical rows in place, preserves tracker predictions and wagers, and is safe to rerun. Unresolved or ambiguous source records are reported and return a non-zero CLI status; they are never guessed.
+
+The browser hierarchy is:
+
+```text
+/cards
+/cards/<card>
+/cards/<card>/fights/<fight>
+/fighters/<fighter>
+```
+
+Cards are paginated newest-to-oldest. Card and fight pages show source-backed metadata, results, tale-of-the-tape values, totals, and per-round statistics. Fighter pages are functional profile shells with known fight history. A full `/fighters` index and search design remain future work. The sibling repository is not required to start Flask, and no live source requests occur at web-app runtime.
+
 ## Project plan
 
 The canonical execution contract is [MMA Picks Tracker Implementation Plan](MMA%20Picks%20Tracker%20Implementation%20Plan.md). The seven-gate status is:
