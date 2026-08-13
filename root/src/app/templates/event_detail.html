@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ event.name }} - MMA Picks Tracker{% endblock %}
 {% block content %}
-<div class="page-heading"><div><p class="eyebrow">{{ event.promotion }} · {{ event.event_date }}</p><h1>{{ event.name }}</h1></div><div class="form-actions">{% if event.status not in ['completed', 'canceled'] %}<a class="button secondary" href="{{ url_for('web.provider_bouts', event_id=event.id) }}">Discover bouts</a><a class="button secondary" href="{{ url_for('web.edit_event', event_id=event.id) }}">Edit Card</a>{% endif %}</div></div>
+<div class="page-heading"><div><p class="muted">{{ event.promotion }} · {{ event.event_date }}</p><h1>{{ event.name }}</h1></div><div class="form-actions">{% if event.status not in ['completed', 'canceled'] %}<a class="button secondary" href="{{ url_for('web.provider_bouts', event_id=event.id) }}">Discover bouts</a><a class="button secondary" href="{{ url_for('web.edit_event', event_id=event.id) }}">Edit Card</a>{% endif %}</div></div>
 <section class="panel table-panel"><div class="section-heading"><h2>Card</h2><span class="status">{{ event.status }}</span></div>
 <div class="table-scroll"><table><thead><tr><th>Bout</th><th>Matchup</th><th>Analyst</th><th>Pick</th><th>Confidence</th><th>Moneyline</th><th>Sportsbook</th><th>Stake</th><th>Result</th><th>Profit</th></tr></thead>
 <tbody>{% for fight in event.fights %}<tr>

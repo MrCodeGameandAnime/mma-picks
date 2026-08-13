@@ -7,7 +7,14 @@ from .app.db import initialize_database
 from .app.api_v1 import api_v1
 from .app.catalog import catalog
 from .app.web import web
-from .app.formatting import format_money
+from .app.formatting import (
+    format_american_date,
+    format_height,
+    format_money,
+    format_reach,
+    format_tape_value,
+    format_weight_class,
+)
 from .app.rapidapi import AllowAllApiAccessPolicy, LoggingApiUsageLogger
 
 
@@ -36,6 +43,11 @@ def create_app(config=None, *, api_access_policy=None, api_usage_logger=None) ->
     flask_app.config["TEMPLATES_DIR"] = str(TEMPLATES_DIR)
     flask_app.config["STATIC_DIR"] = str(STATIC_DIR)
     flask_app.jinja_env.filters["money"] = format_money
+    flask_app.jinja_env.filters["american_date"] = format_american_date
+    flask_app.jinja_env.filters["height"] = format_height
+    flask_app.jinja_env.filters["reach"] = format_reach
+    flask_app.jinja_env.filters["tape_value"] = format_tape_value
+    flask_app.jinja_env.filters["weight_class"] = format_weight_class
     flask_app.extensions["api_access_policy"] = api_access_policy or AllowAllApiAccessPolicy()
     flask_app.extensions["api_usage_logger"] = api_usage_logger or LoggingApiUsageLogger(
         flask_app.logger

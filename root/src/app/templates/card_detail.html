@@ -1,10 +1,11 @@
 {% extends "base.html" %}
 {% block title %}{{ card.name }} · MMA Picks Tracker{% endblock %}
 {% block content %}
-<div class="page-heading"><div><p class="eyebrow">UFC · {{ card.event_date }}</p><h1>{{ card.name }}</h1><p class="muted">{{ card.location or 'Location unavailable' }}</p></div>{% if card.source_url %}<a class="button secondary" href="{{ card.source_url }}">UFCStats source</a>{% endif %}</div>
+<div class="page-heading"><div><h1>{{ card.name }}</h1><p class="muted card-meta">{{ card.location or 'Location unavailable' }} · {{ card.event_date|american_date }}</p></div></div>
 <section class="panel catalog-fights">
+<div class="fight-row fight-row-header" aria-hidden="true"><span>#</span><span>Matchup</span><span>Division</span><span>Result</span></div>
 {% for fight in card.fights %}<a class="fight-row" href="{{ url_for('catalog.fight_detail', event_id=card.id, fight_id=fight.id) }}">
-    <span class="bout-order">{{ fight.bout_order }}</span><span class="matchup"><strong>{{ fight.fighter_a }}</strong><span>vs</span><strong>{{ fight.fighter_b }}</strong></span><span>{{ fight.weight_class or 'Weight class unavailable' }}</span><span>{{ fight.winner or fight.result_method or fight.status }}</span>
+    <span class="bout-order">{{ fight.bout_order }}</span><span class="matchup"><strong>{{ fight.fighter_a }}</strong><span>vs</span><strong>{{ fight.fighter_b }}</strong></span><span>{{ fight.weight_class|weight_class if fight.weight_class else 'Weight class unavailable' }}</span><span>{% if fight.winner %}Winner: {{ fight.winner }}{% else %}{{ fight.result_method or fight.status }}{% endif %}</span>
 </a>{% else %}<p class="muted">No fights imported for this card.</p>{% endfor %}
 </section>
 {% endblock %}

@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Discover Provider Bouts - MMA Picks Tracker{% endblock %}
 {% block content %}
-<div class="page-heading"><div><p class="eyebrow">{{ event.promotion }} · {{ event.event_date }}</p><h1>Discover bouts for {{ event.name }}</h1><p class="muted">Select only the bouts that belong to this card. Discovery does not request bookmaker odds.</p></div><a class="button secondary" href="{{ url_for('web.event_detail', event_id=event.id) }}">Back to card</a></div>
+<div class="page-heading"><div><p class="muted">{{ event.promotion }} · {{ event.event_date }}</p><h1>Discover bouts for {{ event.name }}</h1><p class="muted">Select only the bouts that belong to this card. Discovery does not request bookmaker odds.</p></div><a class="button secondary" href="{{ url_for('web.event_detail', event_id=event.id) }}">Back to card</a></div>
 {% if quota %}<p class="muted">{{ quota }}</p>{% endif %}
 <form method="post"><section class="panel"><div class="table-scroll"><table><thead><tr><th>Select</th><th>Commence</th><th>Matchup</th><th>Provider event ID</th></tr></thead><tbody>{% for bout in bouts %}<tr><td><input type="checkbox" name="provider_event_id" value="{{ bout.provider_event_id }}"></td><td>{{ bout.commence_time }}</td><td>{{ bout.home_team }} vs {{ bout.away_team }}</td><td><code>{{ bout.provider_event_id }}</code></td></tr>{% else %}<tr><td colspan="4" class="muted">No available MMA bouts found.</td></tr>{% endfor %}</tbody></table></div></section><div class="form-actions"><button class="button" type="submit">Import selected bouts</button></div></form>
 {% endblock %}

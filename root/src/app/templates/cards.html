@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 {% block title %}UFC Cards · MMA Picks Tracker{% endblock %}
 {% block content %}
-<div class="page-heading"><div><p class="eyebrow">UFCStats catalog</p><h1>Cards</h1></div></div>
+<div class="page-heading"><div><h1>Cards</h1></div></div>
 <section class="panel catalog-list">
 {% for card in cards %}
 <a class="catalog-card" href="{{ url_for('catalog.card_detail', event_id=card.id) }}">
-    <div><strong>{{ card.name }}</strong><span>{{ card.event_date }}</span></div>
+    <div><strong>{{ card.name }}</strong><span>{{ card.event_date|american_date }}</span></div>
     <div><span>{{ card.location or 'Location unavailable' }}</span><span>{{ card.fight_count }} fights</span></div>
 </a>
 {% else %}<p class="muted">No imported UFC cards yet.</p>{% endfor %}
