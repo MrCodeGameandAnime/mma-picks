@@ -66,6 +66,6 @@ def test_directory_sync_isolates_malformed_event_and_committed_counters(tmp_path
 
 
 def test_mobile_tale_of_tape_keeps_three_semantic_columns():
-    css = Path("root/src/app/static/style.css").read_text(encoding="utf-8")
+    css = (Path(__file__).parents[1] / "src" / "app" / "static" / "style.css").read_text(encoding="utf-8")
     assert "grid-template-columns: 105px minmax(0, 1fr) minmax(0, 1fr)" in css
     assert ".tape-grid > div:first-child { display: block; }" in css
