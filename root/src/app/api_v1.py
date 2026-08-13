@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from flask import Blueprint, current_app, jsonify, request
+import re
+import time
+from uuid import uuid4
+
+from flask import Blueprint, current_app, g, jsonify, request
 
 from .services.public_api import (
     PublicApiError,
@@ -14,6 +18,7 @@ from .services.public_api import (
     public_pick,
     public_stats,
 )
+from .rapidapi import ApiAccessError, AllowAllApiAccessPolicy
 
 
 api_v1 = Blueprint("api_v1", __name__, url_prefix="/api/v1")
@@ -27,6 +32,50 @@ def api_status():
 @api_v1.errorhandler(PublicApiError)
 def handle_public_api_error(error: PublicApiError):
     return jsonify({"error": {"code": error.code, "message": error.message}}), error.status_code
+
+
+@api_v1.errorhandler(ApiAccessError)
+def handle_api_access_error(error: ApiAccessError):
+    return jsonify({"error": {"code": error.code, "message": error.message}}), error.status_code
+
+
+@api_v1.errorhandler(500)
+def handle_internal_api_error(error):
+    current_app.logger.exception("api_internal_error", exc_info=error)
+    return jsonify({"error": {"code": "internal_error", "message": "internal server error"}}), 500
+
+
+@api_v1.before_request
+def prepare_api_request():
+    g.api_request_started_at = time.perf_counter()
+    supplied_request_id = request.headers.get("X-Request-ID", "").strip()
+    if re.fullmatch(r"[A-Za-z0-9._-]{1,64}", supplied_request_id):
+        g.api_request_id = supplied_request_id
+    else:
+        g.api_request_id = uuid4().hex
+    policy = current_app.extensions.get("api_access_policy", AllowAllApiAccessPolicy())
+    policy.authorize(request)
+
+
+@api_v1.after_request
+def record_api_request(response):
+    request_id = getattr(g, "api_request_id", uuid4().hex)
+    response.headers["X-Request-ID"] = request_id
+    started_at = getattr(g, "api_request_started_at", time.perf_counter())
+    duration_ms = max(0, round((time.perf_counter() - started_at) * 1000))
+    usage_logger = current_app.extensions.get("api_usage_logger")
+    if usage_logger is not None:
+        try:
+            usage_logger.record(
+                request_id=request_id,
+                method=request.method,
+                path=request.path,
+                status_code=response.status_code,
+                duration_ms=duration_ms,
+            )
+        except Exception:
+            current_app.logger.exception("api_usage_logging_failed")
+    return response
 
 
 def _success(data, **meta):

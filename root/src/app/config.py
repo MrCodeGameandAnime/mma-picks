@@ -21,6 +21,8 @@ class AppConfig:
     odds_api_markets: str = "h2h"
     odds_api_timeout_seconds: float = 10.0
     flask_secret_key: str = "dev-only-change-me"
+    server_host: str = "127.0.0.1"
+    server_port: int = 5000
 
 
 def load_config(
@@ -41,4 +43,6 @@ def load_config(
         odds_api_markets=values.get("ODDS_API_MARKETS", "h2h"),
         odds_api_timeout_seconds=float(values.get("ODDS_API_TIMEOUT_SECONDS", "10")),
         flask_secret_key=values.get("FLASK_SECRET_KEY", "dev-only-change-me"),
+        server_host=values.get("FLASK_HOST", "127.0.0.1"),
+        server_port=int(values.get("PORT", "5000")),
     )

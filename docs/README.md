@@ -2,7 +2,7 @@
 
 A small, single-user Flask application for tracking UFC cards, analyst picks, American moneyline wagers, bankroll performance, and historical odds provenance.
 
-The application is currently implementing Gate 6 (automated analyst ingestion). Gates 1–5 are approved.
+The application is currently implementing Gate 7 (RapidAPI preparation). Gates 1-5 are approved; Gate 6 external analyst adapter remains intentionally disabled pending a stable structured source.
 
 ## Current capabilities
 
@@ -103,6 +103,14 @@ GET /api/v1/analysts/{slug}/stats
 
 Pick and statistics filters include `event`, `date_from`, `date_to`, `gender`, `weight_class`, `card_section`, `confidence_min`, `confidence_max`, `favorite`, `underdog`, and `result`. Favorite/underdog and ROI calculations may use private stored odds internally, but those odds are never returned by the API.
 
+Errors use this stable shape for client integration:
+
+```json
+{"error": {"code": "invalid_parameter", "message": "limit must be between 1 and 200"}}
+```
+
+Known client errors use 4xx responses. Unexpected application failures use HTTP 500 with `internal_error` and do not expose exception details. The application does not validate RapidAPI credentials yet; that responsibility remains a future injected access-policy or hosting-gateway concern.
+
 ## Provider workflow
 
 The Odds API exposes individual MMA bouts, not UFC cards. The tracker therefore keeps card ownership local:
@@ -118,6 +126,16 @@ The Odds API exposes individual MMA bouts, not UFC cards. The tracker therefore 
 Discovery uses the quota-free The Odds API events endpoint. Paid current odds are requested only for explicit import or refresh actions. All imported snapshots remain historical records; refreshing odds never changes an existing wager's recorded line.
 
 Manual sportsbook and moneyline entry remains available when provider data is unavailable or when a manual line is intentionally used.
+
+## Deployment and RapidAPI preparation
+
+The application exposes a WSGI entry point at `root/wsgi.py`. A hosting provider can run `app` with its production WSGI server from the repository root, for example `gunicorn --chdir root wsgi:app`. The local entry point remains `Set-Location root; python main.py run`.
+
+The local entry point defaults to `127.0.0.1:5000`. Deployment environments can set `FLASK_HOST` and `PORT`, normally `0.0.0.0` and the platform-provided port, without changing application code. `DATABASE_PATH`, `FLASK_SECRET_KEY`, and the existing Odds API settings remain environment-driven. The real `root/.env` is never copied into deployment artifacts or committed.
+
+The public API keeps the versioned JSON envelopes and stable error objects documented below. Every API response includes an `X-Request-ID` header. API usage logging records only request ID, method, route path, status, and duration; it does not record query strings, authorization headers, private odds, or wager data.
+
+API access is intentionally allow-all inside the application during this gate. `create_app()` accepts an injectable access policy that can later enforce RapidAPI key validation and rate limits at the boundary. No user accounts, custom billing, pricing, or in-application API-key store are implemented.
 
 ## Automated analyst-source status
 
@@ -161,7 +179,7 @@ The canonical execution contract is [MMA Picks Tracker Implementation Plan](MMA%
 - Gate 3: The Odds API integration - approved
 - Gate 4: Analytics - approved
 - Gate 5: Public API - approved
-- Gate 6: Automated analyst ingestion - in progress; external source adapter pending a stable structured source
-- Gate 7: RapidAPI preparation - planned
+- Gate 6: Automated analyst ingestion - foundation complete; external source adapter pending a stable structured source
+- Gate 7: RapidAPI preparation - in progress
 
 `plan.md` is retained as historical planning material and is not the active execution contract.

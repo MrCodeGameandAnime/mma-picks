@@ -13,7 +13,10 @@ def main(argv=None, app_factory=None) -> int:
         app_factory = create_app
 
     app = app_factory()
-    app.run(host="127.0.0.1", port=5000)
+    app.run(
+        host=app.config.get("SERVER_HOST", "127.0.0.1"),
+        port=int(app.config.get("SERVER_PORT", 5000)),
+    )
     return 0
 
 

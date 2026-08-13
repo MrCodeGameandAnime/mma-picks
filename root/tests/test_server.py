@@ -49,8 +49,10 @@ def test_run_cli_still_delegates_to_the_application():
     calls = []
 
     class FakeApp:
+        config = {"SERVER_HOST": "0.0.0.0", "SERVER_PORT": 8080}
+
         def run(self, **kwargs):
             calls.append(kwargs)
 
     assert main(["run"], app_factory=lambda: FakeApp()) == 0
-    assert calls == [{"host": "127.0.0.1", "port": 5000}]
+    assert calls == [{"host": "0.0.0.0", "port": 8080}]
