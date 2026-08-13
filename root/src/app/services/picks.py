@@ -116,19 +116,33 @@ def ingest_picks(
                 published_at = _canonical_published_at(pick.published_at)
                 existing = connection.execute(
                     """
-                    SELECT id, source_identifier, source_url
+                    SELECT id, source_identifier, source_url,
+                           picked_fighter, confidence, predicted_method,
+                           source_published_at
                     FROM predictions
                     WHERE fight_id = ? AND analyst_id = ?
                     """,
                     (fight["id"], analyst["id"]),
                 ).fetchone()
                 if existing is not None:
-                    if (
+                    same_source = (
                         existing["source_identifier"] == pick.source_identifier
                         and existing["source_url"] == pick.source_url
-                    ):
-                        prediction_ids.append(int(existing["id"]))
-                        continue
+                    )
+                    if same_source:
+                        same_payload = (
+                            existing["picked_fighter"] == pick.picked_fighter
+                            and existing["confidence"] == pick.confidence
+                            and existing["predicted_method"] == pick.predicted_method
+                            and existing["source_published_at"] == published_at
+                        )
+                        if same_payload:
+                            prediction_ids.append(int(existing["id"]))
+                            continue
+                        raise PicksImportError(
+                            f"source payload changed for prediction {existing['id']}; "
+                            "existing prediction was not replaced"
+                        )
                     raise PicksImportError(
                         f"prediction already exists for fight {fight['id']}; "
                         "manual or prior source data was not replaced"

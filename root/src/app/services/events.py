@@ -268,6 +268,7 @@ def save_event(
                 prediction_rows = connection.execute(
                     """
                     SELECT p.fight_id, p.analyst_id, p.picked_fighter,
+                           p.confidence, p.predicted_method,
                            p.source_url, p.source_published_at, p.captured_at,
                            p.source_identifier
                     FROM predictions p
@@ -352,6 +353,8 @@ def save_event(
                         for prediction in preserved_predictions.get(fight.fight_id or -1, [])
                         if prediction["analyst_id"] == fight.analyst_id
                         and prediction["picked_fighter"] == fight.picked_fighter
+                        and prediction["confidence"] == fight.confidence
+                        and prediction["predicted_method"] == fight.predicted_method
                     ),
                     None,
                 )
