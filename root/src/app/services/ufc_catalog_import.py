@@ -495,17 +495,32 @@ def sync_catalog(
             del fighter_ids
         names = _fighter_name_index(connection)
         issues_by_event: dict[str, list[str]] = defaultdict(list)
+        invalid_fighter_names: set[str] = set()
         for issue in source.content_errors:
             if issue.event_name:
                 issues_by_event[issue.event_name].append(issue.message)
             else:
                 summary.errors.append(issue.message)
+            if issue.fighter_name:
+                invalid_fighter_names.add(_name_key(issue.fighter_name))
+
+        known_event_names = {event.name for event in source.events}
+        for event_name, errors in sorted(issues_by_event.items()):
+            if event_name not in known_event_names:
+                summary.events_processed += 1
+                _record_event_failure(summary, ImportSummary(summary.source_directory), event_name, "; ".join(errors), 0)
+
         for event in source.events:
             summary.events_processed += 1
             event_fights = fights_by_event.get(event.name, [])
             event_summary = ImportSummary(summary.source_directory)
-            if issues_by_event.get(event.name):
-                _record_event_failure(summary, event_summary, event.name, "; ".join(issues_by_event[event.name]), len(event_fights))
+            event_errors = list(issues_by_event.get(event.name, []))
+            for fight in event_fights:
+                if (_name_key(fight.fighter_a) in invalid_fighter_names or
+                        _name_key(fight.fighter_b) in invalid_fighter_names):
+                    event_errors.append(f"fight depends on malformed fighter content: {fight.bout}")
+            if event_errors:
+                _record_event_failure(summary, event_summary, event.name, "; ".join(event_errors), len(event_fights))
                 continue
             try:
                 with transaction(connection):

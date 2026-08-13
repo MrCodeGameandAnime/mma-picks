@@ -24,6 +24,7 @@ class UFCStatsSourceError(ValueError):
 class SourceContentError:
     event_name: str | None
     message: str
+    fighter_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -269,59 +270,62 @@ def _load_csv(path: Path, fields: tuple[str, ...]) -> list[dict[str, str]]:
         return list(reader)
 
 
-def _parse_events(source_dir: Path) -> tuple[EventRecord, ...]:
+def _parse_events(
+    source_dir: Path,
+    issues: list[SourceContentError] | None = None,
+) -> tuple[EventRecord, ...]:
+    issues = issues if issues is not None else []
     fields = ("EVENT", "URL", "DATE", "LOCATION")
     records: list[EventRecord] = []
     seen: set[str] = set()
-    for line_number, row in enumerate(
-        _load_csv(source_dir / "ufc_event_details.csv", fields), 2
-    ):
-        name = _required(row, "EVENT", line_number)
-        external_id, source_url = _parse_identity(
-            _required(row, "URL", line_number), "event"
-        )
-        if external_id in seen:
-            raise UFCStatsSourceError(f"duplicate event identity: {external_id}")
-        seen.add(external_id)
-        records.append(
-            EventRecord(
-                name=name,
-                source_url=source_url,
-                external_id=external_id,
-                event_date=_parse_date(row.get("DATE")),
-                location=_text(row.get("LOCATION")),
-            )
-        )
+    for line_number, row in enumerate(_load_csv(source_dir / "ufc_event_details.csv", fields), 2):
+        event_name = _text(row.get("EVENT"))
+        try:
+            name = _required(row, "EVENT", line_number)
+            external_id, source_url = _parse_identity(_required(row, "URL", line_number), "event")
+            if external_id in seen:
+                raise UFCStatsSourceError(f"duplicate event identity: {external_id}")
+            event_date = _parse_date(row.get("DATE"))
+            seen.add(external_id)
+            records.append(EventRecord(name, source_url, external_id, event_date, _text(row.get("LOCATION"))))
+        except UFCStatsSourceError as exc:
+            issues.append(SourceContentError(event_name, f"event line {line_number}: {exc}"))
     return tuple(records)
 
 
-def _parse_fighters(source_dir: Path) -> tuple[FighterRecord, ...]:
+def _parse_fighters(
+    source_dir: Path,
+    issues: list[SourceContentError] | None = None,
+) -> tuple[FighterRecord, ...]:
+    issues = issues if issues is not None else []
     detail_fields = ("FIRST", "LAST", "NICKNAME", "URL")
     tott_fields = ("FIGHTER", "HEIGHT", "WEIGHT", "REACH", "STANCE", "DOB", "URL")
     details: dict[str, dict[str, str]] = {}
     urls: dict[str, str] = {}
-    for line_number, row in enumerate(
-        _load_csv(source_dir / "ufc_fighter_details.csv", detail_fields), 2
-    ):
-        external_id, source_url = _parse_identity(
-            _required(row, "URL", line_number), "fighter"
-        )
-        if external_id in details:
-            raise UFCStatsSourceError(f"duplicate fighter identity: {external_id}")
-        details[external_id] = row
-        urls[external_id] = source_url
+    invalid_ids: set[str] = set()
+
+    for line_number, row in enumerate(_load_csv(source_dir / "ufc_fighter_details.csv", detail_fields), 2):
+        fighter_name = " ".join(part for part in (_text(row.get("FIRST")), _text(row.get("LAST"))) if part) or None
+        try:
+            external_id, source_url = _parse_identity(_required(row, "URL", line_number), "fighter")
+            if external_id in details:
+                raise UFCStatsSourceError(f"duplicate fighter identity: {external_id}")
+            details[external_id] = dict(row)
+            urls[external_id] = source_url
+        except UFCStatsSourceError as exc:
+            issues.append(SourceContentError(None, f"fighter detail line {line_number}: {exc}", fighter_name))
 
     tott: dict[str, dict[str, str]] = {}
-    for line_number, row in enumerate(
-        _load_csv(source_dir / "ufc_fighter_tott.csv", tott_fields), 2
-    ):
-        external_id, source_url = _parse_identity(
-            _required(row, "URL", line_number), "fighter"
-        )
-        if external_id in tott:
-            raise UFCStatsSourceError(f"duplicate TOTT identity: {external_id}")
-        tott[external_id] = row
-        urls.setdefault(external_id, source_url)
+    for line_number, row in enumerate(_load_csv(source_dir / "ufc_fighter_tott.csv", tott_fields), 2):
+        fighter_name = _text(row.get("FIGHTER"))
+        try:
+            external_id, source_url = _parse_identity(_required(row, "URL", line_number), "fighter")
+            if external_id in tott:
+                raise UFCStatsSourceError(f"duplicate TOTT identity: {external_id}")
+            tott[external_id] = dict(row)
+            urls.setdefault(external_id, source_url)
+        except UFCStatsSourceError as exc:
+            issues.append(SourceContentError(None, f"fighter TOTT line {line_number}: {exc}", fighter_name))
 
     records: list[FighterRecord] = []
     for external_id in sorted(urls):
@@ -330,14 +334,14 @@ def _parse_fighters(source_dir: Path) -> tuple[FighterRecord, ...]:
         first = _text(detail.get("FIRST"))
         last = _text(detail.get("LAST"))
         fallback_name = _text(tape.get("FIGHTER"))
-        canonical_name = " ".join(part for part in (first, last) if part) or fallback_name
-        if canonical_name is None:
-            raise UFCStatsSourceError(f"fighter {external_id} has no display name")
-        records.append(
-            FighterRecord(
+        fighter_name = " ".join(part for part in (first, last) if part) or fallback_name
+        try:
+            if fighter_name is None:
+                raise UFCStatsSourceError(f"fighter {external_id} has no display name")
+            record = FighterRecord(
                 external_id=external_id,
                 source_url=urls[external_id],
-                canonical_name=canonical_name,
+                canonical_name=fighter_name,
                 first_name=first,
                 last_name=last,
                 nickname=_text(detail.get("NICKNAME")),
@@ -347,85 +351,92 @@ def _parse_fighters(source_dir: Path) -> tuple[FighterRecord, ...]:
                 reach_inches=parse_reach(tape.get("REACH")),
                 stance=_text(tape.get("STANCE")),
             )
-        )
-    return tuple(records)
+            records.append(record)
+        except (UFCStatsSourceError, ValueError) as exc:
+            invalid_ids.add(external_id)
+            issues.append(SourceContentError(None, f"fighter {external_id}: {exc}", fighter_name))
+    return tuple(record for record in records if record.external_id not in invalid_ids)
 
 
-def _parse_fights(source_dir: Path, events: tuple[EventRecord, ...], issues: list[SourceContentError] | None = None) -> tuple[FightRecord, ...]:
+def _parse_fights(
+    source_dir: Path,
+    events: tuple[EventRecord, ...],
+    issues: list[SourceContentError] | None = None,
+) -> tuple[FightRecord, ...]:
     issues = issues if issues is not None else []
     detail_fields = ("EVENT", "BOUT", "URL")
-    result_fields = (
-        "EVENT", "BOUT", "OUTCOME", "WEIGHTCLASS", "METHOD", "ROUND",
-        "TIME", "TIME FORMAT", "REFEREE", "DETAILS", "URL",
-    )
+    result_fields = ("EVENT", "BOUT", "OUTCOME", "WEIGHTCLASS", "METHOD", "ROUND", "TIME", "TIME FORMAT", "REFEREE", "DETAILS", "URL")
     event_names = {event.name for event in events}
     details_by_id: dict[str, dict[str, str]] = {}
-    for line_number, row in enumerate(
-        _load_csv(source_dir / "ufc_fight_details.csv", detail_fields), 2
-    ):
-        external_id, source_url = _parse_identity(
-            _required(row, "URL", line_number), "fight"
-        )
-        row = dict(row)
-        row["URL"] = source_url
-        if external_id not in details_by_id or row["EVENT"].strip() in event_names:
-            details_by_id[external_id] = row
-
-    results_by_id: dict[str, dict[str, str]] = {}
-    for line_number, row in enumerate(
-        _load_csv(source_dir / "ufc_fight_results.csv", result_fields), 2
-    ):
+    for line_number, row in enumerate(_load_csv(source_dir / "ufc_fight_details.csv", detail_fields), 2):
         event_name = _text(row.get("EVENT"))
         try:
-            external_id, source_url = _parse_identity(
-                _required(row, "URL", line_number), "fight"
-            )
+            event_name = _required(row, "EVENT", line_number)
+            bout = _required(row, "BOUT", line_number)
+            if _BOUT_RE.fullmatch(bout) is None:
+                raise UFCStatsSourceError(f"invalid bout: {bout}")
+            external_id, source_url = _parse_identity(_required(row, "URL", line_number), "fight")
+            if external_id in details_by_id:
+                raise UFCStatsSourceError(f"duplicate fight identity: {external_id}")
             row = dict(row)
             row["URL"] = source_url
+            if event_name in event_names:
+                details_by_id[external_id] = row
+            else:
+                issues.append(SourceContentError(event_name, f"fight detail line {line_number}: unknown event"))
+        except UFCStatsSourceError as exc:
+            issues.append(SourceContentError(event_name, f"fight detail line {line_number}: {exc}"))
+
+    results_by_id: dict[str, dict[str, str]] = {}
+    for line_number, row in enumerate(_load_csv(source_dir / "ufc_fight_results.csv", result_fields), 2):
+        event_name = _text(row.get("EVENT"))
+        try:
+            event_name = _required(row, "EVENT", line_number)
+            outcome = _required(row, "OUTCOME", line_number)
+            round_text = _text(row.get("ROUND"))
+            if round_text and not round_text.isdigit():
+                raise UFCStatsSourceError(f"invalid result round: {round_text}")
+            external_id, source_url = _parse_identity(_required(row, "URL", line_number), "fight")
+            row = dict(row)
+            row["URL"] = source_url
+            row["OUTCOME"] = outcome
             if external_id not in results_by_id or event_name in event_names:
                 results_by_id[external_id] = row
         except UFCStatsSourceError as exc:
             issues.append(SourceContentError(event_name, f"fight result line {line_number}: {exc}"))
+
     event_orders: dict[str, dict[str, int]] = defaultdict(dict)
     for external_id, detail in details_by_id.items():
-        event_name = _required(detail, "EVENT", 0)
+        event_name = detail["EVENT"]
         event_orders[event_name].setdefault(external_id, len(event_orders[event_name]) + 1)
 
     records: list[FightRecord] = []
     for external_id, detail in details_by_id.items():
-        event_name = _required(detail, "EVENT", 0)
+        event_name = detail["EVENT"]
         result = results_by_id.get(external_id)
-        if result is None:
-            issues.append(SourceContentError(event_name, f"missing result for fight {external_id}"))
-            continue
-        event_name = _required(detail, "EVENT", 0)
-        bout = _required(detail, "BOUT", 0)
-        match = _BOUT_RE.fullmatch(bout)
-        if match is None:
-            raise UFCStatsSourceError(f"invalid bout: {bout}")
-        records.append(
-            FightRecord(
+        try:
+            if result is None:
+                raise UFCStatsSourceError(f"missing result for fight {external_id}")
+            round_text = _text(result.get("ROUND"))
+            records.append(FightRecord(
                 event_name=event_name,
-                bout=bout,
-                fighter_a=match.group(1).strip(),
-                fighter_b=match.group(2).strip(),
+                bout=detail["BOUT"],
+                fighter_a=_BOUT_RE.fullmatch(detail["BOUT"]).group(1).strip(),
+                fighter_b=_BOUT_RE.fullmatch(detail["BOUT"]).group(2).strip(),
                 source_url=detail["URL"],
                 external_id=external_id,
                 weight_class=_text(result.get("WEIGHTCLASS")),
                 outcome=_required(result, "OUTCOME", 0),
                 method=_text(result.get("METHOD")),
-                result_round=(
-                    int(result["ROUND"])
-                    if _text(result.get("ROUND")) and _text(result.get("ROUND")).isdigit()
-                    else None
-                ),
+                result_round=int(round_text) if round_text else None,
                 result_time=_text(result.get("TIME")),
                 result_time_format=_text(result.get("TIME FORMAT")),
                 referee=_text(result.get("REFEREE")),
                 result_details=_text(result.get("DETAILS")),
                 bout_order=event_orders[event_name][external_id],
-            )
-        )
+            ))
+        except (UFCStatsSourceError, AttributeError, ValueError) as exc:
+            issues.append(SourceContentError(event_name, f"fight {external_id}: {exc}"))
     return tuple(sorted(records, key=lambda record: (record.event_name, record.bout_order)))
 
 
@@ -459,8 +470,8 @@ def _parse_stats(source_dir: Path, issues: list[SourceContentError] | None = Non
 def load_source(source_dir: str | Path) -> UFCStatsSource:
     source_dir = Path(source_dir)
     issues: list[SourceContentError] = []
-    events = _parse_events(source_dir)
-    fighters = _parse_fighters(source_dir)
+    events = _parse_events(source_dir, issues)
+    fighters = _parse_fighters(source_dir, issues)
     fights = _parse_fights(source_dir, events, issues)
     round_stats = _parse_stats(source_dir, issues)
     return UFCStatsSource(events, fighters, fights, round_stats, tuple(issues))
