@@ -352,6 +352,8 @@ def save_event(
                         prediction
                         for prediction in preserved_predictions.get(fight.fight_id or -1, [])
                         if prediction["analyst_id"] == fight.analyst_id
+                        and tuple(sorted((old.get("fighter_a"), old.get("fighter_b"))))
+                        == tuple(sorted((fight.fighter_a, fight.fighter_b)))
                         and prediction["picked_fighter"] == fight.picked_fighter
                         and prediction["confidence"] == fight.confidence
                         and prediction["predicted_method"] == fight.predicted_method

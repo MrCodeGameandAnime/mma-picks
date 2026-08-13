@@ -119,7 +119,13 @@ def edit_prediction(
     *,
     confidence=80,
     predicted_method="decision",
+    fighter_a=None,
+    fighter_b=None,
+    picked_fighter=None,
 ):
+    fighter_a = fight["fighter_a"] if fighter_a is None else fighter_a
+    fighter_b = fight["fighter_b"] if fighter_b is None else fighter_b
+    picked_fighter = fighter_a if picked_fighter is None else picked_fighter
     save_event(
         database_path,
         promotion="UFC",
@@ -128,10 +134,10 @@ def edit_prediction(
         event_id=event_id,
         fights=[
             fight_input(
-                fight["fighter_a"],
-                fight["fighter_b"],
+                fighter_a,
+                fighter_b,
                 analyst_id=analyst_id,
-                picked_fighter=fight["fighter_a"],
+                picked_fighter=picked_fighter,
                 confidence=confidence,
                 predicted_method=predicted_method,
                 fight_id=fight["id"],
@@ -366,6 +372,60 @@ def test_changed_predicted_method_clears_automated_prediction_provenance(tmp_pat
     assert prediction["source_url"] is None
     assert prediction["source_published_at"] is None
     assert prediction["captured_at"] == "2026-08-12T00:01:00Z"
+
+
+def test_changed_opponent_clears_automated_prediction_provenance(tmp_path, monkeypatch):
+    app = make_app(tmp_path)
+    database_path = app.config["DATABASE_PATH"]
+    event_id = create_card(database_path, fight_input("Alpha", "Beta"))
+    ingest_picks(database_path, event_id, "theweasle", [pick("Alpha", "Beta")], provider_name="fixture")
+    fight, analyst_id = source_edit_context(database_path, event_id)
+    monkeypatch.setattr("src.app.services.events.utc_now", lambda: "2026-08-12T00:02:00Z")
+
+    edit_prediction(
+        database_path,
+        event_id,
+        fight,
+        analyst_id,
+        fighter_b="Gamma",
+        picked_fighter="Alpha",
+    )
+
+    with connect(database_path) as connection:
+        prediction = connection.execute(
+            "SELECT source_identifier, source_url, source_published_at, captured_at FROM predictions"
+        ).fetchone()
+    assert prediction["source_identifier"] is None
+    assert prediction["source_url"] is None
+    assert prediction["source_published_at"] is None
+    assert prediction["captured_at"] == "2026-08-12T00:02:00Z"
+
+
+def test_swapped_fighter_order_preserves_automated_prediction_provenance(tmp_path):
+    app = make_app(tmp_path)
+    database_path = app.config["DATABASE_PATH"]
+    event_id = create_card(database_path, fight_input("Alpha", "Beta"))
+    ingest_picks(database_path, event_id, "theweasle", [pick("Alpha", "Beta")], provider_name="fixture")
+    with connect(database_path) as connection:
+        original = dict(connection.execute("SELECT * FROM predictions").fetchone())
+    fight, analyst_id = source_edit_context(database_path, event_id)
+
+    edit_prediction(
+        database_path,
+        event_id,
+        fight,
+        analyst_id,
+        fighter_a="Beta",
+        fighter_b="Alpha",
+        picked_fighter="Alpha",
+    )
+
+    with connect(database_path) as connection:
+        prediction = connection.execute("SELECT * FROM predictions").fetchone()
+    assert prediction["source_identifier"] == original["source_identifier"]
+    assert prediction["source_url"] == original["source_url"]
+    assert prediction["source_published_at"] == original["source_published_at"]
+    assert prediction["captured_at"] == original["captured_at"]
 
 
 def test_provider_import_does_not_replace_manual_prediction(tmp_path):
