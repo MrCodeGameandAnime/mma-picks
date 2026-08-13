@@ -1,0 +1,4 @@
+EVENT,BOUT,OUTCOME,WEIGHTCLASS,METHOD,ROUND,TIME,TIME FORMAT,REFEREE,DETAILS,URL
+UFC Fixture One,Alpha One vs. Bravo Two,W/L,Lightweight,Decision - Unanimous,3,5:00,3 Rnd (5-5-5),Ref One,,http://ufcstats.com/fight-details/aaaaaaaa11111111
+UFC Fixture One,Charlie Three vs. Delta Four,L/W,Middleweight,Submission,1,2:02,3 Rnd (5-5-5),Ref Two,Armbar,http://ufcstats.com/fight-details/bbbbbbbb22222222
+UFC Fixture Two,Alpha One vs. Charlie Three,NC/NC,Welterweight,Overturned,1,1:00,3 Rnd (5-5-5),Ref Three,,http://ufcstats.com/fight-details/cccccccc33333333
