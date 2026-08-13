@@ -15,7 +15,7 @@ def test_app_factory_uses_a_temporary_database(tmp_path):
     assert Path(app.static_folder).resolve() == STATIC_DIR.resolve()
     assert Path(app.config["TEMPLATES_DIR"]).resolve() == TEMPLATES_DIR.resolve()
     assert Path(app.config["STATIC_DIR"]).resolve() == STATIC_DIR.resolve()
-    assert set(app.blueprints) == {"web", "api_v1"}
+    assert set(app.blueprints) == {"web", "api_v1", "catalog"}
 
     response = app.test_client().get("/")
 

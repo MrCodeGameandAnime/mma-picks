@@ -448,6 +448,7 @@ def list_events(database_path: str | Path) -> list[dict]:
             SELECT e.*, COUNT(f.id) AS fight_count
             FROM events e
             LEFT JOIN fights f ON f.event_id = e.id
+            WHERE COALESCE(e.external_provider, '') != 'ufcstats'
             GROUP BY e.id
             ORDER BY e.event_date DESC, e.id DESC
             """

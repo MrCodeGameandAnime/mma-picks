@@ -41,3 +41,23 @@ label { color: #475467; display: flex; flex-direction: column; font-size: .85rem
 .flash.error { background: #fde9e7; color: #9b2c23; }
 @media (max-width: 900px) { .metric-grid, .form-grid, .settlement-grid { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 600px) { .site-header { align-items: flex-start; flex-direction: column; gap: 12px; } .site-header a { margin-left: 0; margin-right: 14px; } .metric-grid, .form-grid, .settlement-grid { grid-template-columns: 1fr; } }
+.catalog-list { padding: 0; }
+.catalog-card { border-bottom: 1px solid #e8ebef; color: #172033; display: flex; justify-content: space-between; gap: 20px; padding: 18px; }
+.catalog-card:last-child { border-bottom: 0; }
+.catalog-card:hover { background: #f8fafc; text-decoration: none; }
+.catalog-card div { display: flex; flex-direction: column; gap: 6px; }
+.catalog-card span, .fight-row > span:not(.matchup) { color: #667085; font-size: .9rem; }
+.fight-row { align-items: center; border-bottom: 1px solid #e8ebef; color: #172033; display: grid; gap: 18px; grid-template-columns: 45px minmax(280px, 1fr) 180px 180px; padding: 16px 8px; }
+.fight-row:hover { background: #f8fafc; text-decoration: none; }
+.matchup { align-items: center; display: flex; gap: 9px; }
+.matchup span, .vs { color: #667085; font-size: .85rem; }
+.bout-order { color: #667085; font-weight: 700; }
+.pagination { align-items: center; display: flex; gap: 14px; justify-content: center; margin: 16px 0 24px; }
+.detail-grid { display: grid; gap: 14px 24px; grid-template-columns: repeat(4, 1fr); margin: 18px 0 0; }
+.detail-grid dt { color: #667085; font-size: .82rem; }
+.detail-grid dd { margin: 4px 0 0; }
+.tape-grid { align-items: center; display: grid; gap: 12px; grid-template-columns: 140px 1fr 1fr; margin-top: 18px; }
+.tape-grid > div { border-bottom: 1px solid #e8ebef; padding: 8px 0; }
+.tape-grid h3 { margin: 0; }
+@media (max-width: 900px) { .fight-row { grid-template-columns: 35px minmax(240px, 1fr) 140px; } .fight-row > span:last-child { display: none; } .detail-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 600px) { .catalog-card, .fight-row { align-items: flex-start; flex-direction: column; display: flex; } .tape-grid { grid-template-columns: 1fr 1fr; } .tape-grid > div:first-child { display: none; } .tape-grid h3 { grid-column: span 1; } .detail-grid { grid-template-columns: 1fr; } }

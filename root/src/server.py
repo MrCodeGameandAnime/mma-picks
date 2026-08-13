@@ -5,6 +5,7 @@ from flask import Flask
 from .app.config import load_config
 from .app.db import initialize_database
 from .app.api_v1 import api_v1
+from .app.catalog import catalog
 from .app.web import web
 from .app.formatting import format_money
 from .app.rapidapi import AllowAllApiAccessPolicy, LoggingApiUsageLogger
@@ -41,5 +42,6 @@ def create_app(config=None, *, api_access_policy=None, api_usage_logger=None) ->
     )
     flask_app.register_blueprint(web)
     flask_app.register_blueprint(api_v1)
+    flask_app.register_blueprint(catalog)
 
     return flask_app
