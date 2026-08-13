@@ -7,7 +7,7 @@
 {%- endmacro %}
 {% block title %}{{ 'Edit' if edit else 'New' }} Card - MMA Picks Tracker{% endblock %}
 {% block content %}
-<div class="page-heading"><div><p class="eyebrow">Manual tracker</p><h1>{{ 'Edit' if edit else 'New' }} card</h1></div></div>
+<div class="page-heading"><div><h1>{{ 'Edit' if edit else 'New' }} card</h1></div></div>
 <form method="post" class="card-form">
     <input type="hidden" name="fight_count" value="15">
     <section class="panel form-panel"><div class="form-grid">

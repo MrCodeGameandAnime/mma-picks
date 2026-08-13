@@ -21,6 +21,7 @@ def test_app_factory_uses_a_temporary_database(tmp_path):
 
     assert response.status_code == 200
     assert "Dashboard" in response.get_data(as_text=True)
+    assert "Bankroll experiment" not in response.get_data(as_text=True)
 
 
 def test_api_v1_blueprint_is_registered(tmp_path):
@@ -36,6 +37,16 @@ def test_api_v1_blueprint_is_registered(tmp_path):
     }
     assert static_response.status_code == 200
     assert "metric-grid" in static_response.get_data(as_text=True)
+
+
+def test_page_eyebrows_are_removed(tmp_path):
+    client = create_app(AppConfig(database_path=tmp_path / "tracker.db")).test_client()
+
+    assert '<p class="eyebrow">Tracker</p>' not in client.get("/events").get_data(as_text=True)
+    analytics = client.get("/analytics").get_data(as_text=True)
+    assert '<p class="eyebrow">Gate 4</p>' not in analytics
+    assert "Pandas-backed performance summaries with explicit sample sizes." not in analytics
+    assert '<p class="eyebrow">Manual tracker</p>' not in client.get("/events/new").get_data(as_text=True)
 
 
 def test_invalid_cli_does_not_create_an_application():
