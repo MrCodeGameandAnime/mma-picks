@@ -120,7 +120,7 @@ def parse_fights(
         picked_fighter = None
         confidence = None
         if has_prediction:
-            analyst_slug = _text(form.get(f"analyst_{index}"))
+            analyst_slug = _text(form.get(f"analyst_{index}")) or "theweasle"
             analyst_id = analyst_ids.get(analyst_slug)
             if analyst_id is None:
                 raise ValidationError(f"fight {index} has an unknown analyst")

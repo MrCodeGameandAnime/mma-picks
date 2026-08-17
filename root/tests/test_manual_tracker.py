@@ -82,6 +82,34 @@ def test_whole_card_entry_allows_drafts_and_saves_atomically(tmp_path):
         assert connection.execute("SELECT picked_fighter FROM predictions").fetchone()[0] == "Fighter A"
 
 
+
+def test_edit_form_defaults_unassigned_fights_to_theweasle(tmp_path):
+    app = make_app(tmp_path)
+    client = app.test_client()
+    form = card_form("Analyst Default Card")
+    form.update(fight_only_fields(1, "Fighter A", "Fighter B"))
+    event_id = create_card(client, form)
+
+    with connect(app.config["DATABASE_PATH"]) as connection:
+        fight_id = connection.execute(
+            "SELECT id FROM fights WHERE event_id = ?", (event_id,)
+        ).fetchone()[0]
+
+    rendered = client.get(f"/events/{event_id}/edit").get_data(as_text=True)
+    assert 'name="analyst_1" value="theweasle"' in rendered
+
+    edited = card_form("Analyst Default Card")
+    edited.update(fight_only_fields(1, "Fighter A", "Fighter B"))
+    edited.update({
+        "fight_id_1": str(fight_id),
+        "picked_fighter_1": "fighter_a",
+        "confidence_1": "60",
+        "predicted_method_1": "decision",
+    })
+    response = client.post(f"/events/{event_id}/edit", data=edited)
+    assert response.status_code == 302
+
+
 def test_real_form_uses_side_tokens_and_does_not_force_blank_stakes(tmp_path):
     client = make_app(tmp_path).test_client()
 
